@@ -19,7 +19,6 @@ from model.common.modules import RandomShiftsAug
 
 
 class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
-
     def __init__(self, cfg):
         super().__init__(cfg)
 
@@ -36,7 +35,6 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         self.grad_accumulate = cfg.train.grad_accumulate
 
     def run(self):
-
         # Start training loop
         timer = Timer()
         run_results = []
@@ -44,7 +42,6 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         last_itr_eval = False
         done_venv = np.zeros((1, self.n_envs))
         while self.itr < self.n_train_itr:
-
             # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
             options_venv = [{} for _ in range(self.n_envs)]
             if self.itr % self.render_freq == 0 and self.render_video:
@@ -171,6 +168,9 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             if not eval_mode:
                 with torch.no_grad():
                     # apply image randomization
+                    # TODO: @JUNTAO, I think env/gym_utils/wrapper/robomimic_image stacks along rgb already,
+                    # so possibly no modification is needed, just need to make sure the encoder
+                    # itself is working correctly.
                     obs_trajs["rgb"] = (
                         torch.from_numpy(obs_trajs["rgb"]).float().to(self.device)
                     )
@@ -293,7 +293,9 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     torch.tensor(values_trajs, device=self.device).float().reshape(-1)
                 )
                 advantages_k = (
-                    torch.tensor(advantages_trajs, device=self.device).float().reshape(-1)
+                    torch.tensor(advantages_trajs, device=self.device)
+                    .float()
+                    .reshape(-1)
                 )
                 logprobs_k = torch.tensor(logprobs_trajs, device=self.device).float()
 
@@ -301,7 +303,6 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 total_steps = self.n_steps * self.n_envs * self.model.ft_denoising_steps
                 clipfracs = []
                 for update_epoch in range(self.update_epochs):
-
                     # for each epoch, go through all data in batches
                     flag_break = False
                     inds_k = torch.randperm(total_steps, device=self.device)

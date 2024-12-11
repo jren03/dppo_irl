@@ -53,6 +53,7 @@ model:
     backbone:
       _target_: model.common.vit.VitEncoder
       obs_shape: ${shape_meta.obs.rgb.shape}
+      # @ JUNTAO: possibly need to multiply by 2 here
       num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
       cfg:
         patch_size: 8

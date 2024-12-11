@@ -169,7 +169,13 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
         train_indices = random.sample(range(num_traj), k=num_train)
 
         # Initialize output dictionaries for train and val sets
-        out_train = {"states": [], "actions": [], "rewards": [], "traj_lengths": []}
+        out_train = {
+            "states": [],
+            "actions": [],
+            "rewards": [],
+            "traj_lengths": [],
+            "images": [],
+        }
         out_val = deepcopy(out_train)
 
         # Process each demo
@@ -201,13 +207,20 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
                 obs = raw_obs
                 actions = raw_actions
 
+            # Process images
+            images = []
+            for camera in args.cameras:
+                camera_images = f[f"data/{ep}/obs/{camera}"][()]
+                images.append(camera_images)
+
             # Store trajectories in output dictionary
             out["states"].append(obs)
             out["actions"].append(actions)
             out["rewards"].append(rewards)
+            out["images"].append(np.array(images))
 
         # Concatenate trajectories (no padding)
-        for key in ["states", "actions", "rewards"]:
+        for key in ["states", "actions", "rewards", "images"]:
             out_train[key] = np.concatenate(out_train[key], axis=0)
 
             # Only concatenate validation set if it exists
@@ -221,6 +234,7 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
             states=np.array(out_train["states"]),
             actions=np.array(out_train["actions"]),
             rewards=np.array(out_train["rewards"]),
+            images=np.array(out_train["images"]),
             terminals=np.array([False] * len(out_train["states"])),
             traj_lengths=np.array(out_train["traj_lengths"]),
         )
@@ -231,6 +245,7 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
             states=np.array(out_val["states"]),
             actions=np.array(out_val["actions"]),
             rewards=np.array(out_val["rewards"]),
+            images=np.array(out_val["images"]),
             terminals=np.array([False] * len(out_val["states"])),
             traj_lengths=np.array(out_val["traj_lengths"]),
         )

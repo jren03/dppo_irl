@@ -83,6 +83,8 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
         log.info(f"States shape/type: {self.states.shape, self.states.dtype}")
         log.info(f"Actions shape/type: {self.actions.shape, self.actions.dtype}")
         if self.use_img:
+            breakpoint()
+            # TODO: @JUNTAO, should stack images along channel dimension
             self.images = torch.from_numpy(dataset["images"][:total_num_steps]).to(
                 device
             )  # (total_num_steps, C, H, W)
