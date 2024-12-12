@@ -6,6 +6,7 @@ data/
 log/
 logs/
 checkpoints/
+raw_data/
 robomimic/
 .github/
 out/

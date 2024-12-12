@@ -19,15 +19,23 @@ horizon_steps: 4
 cond_steps: 1
 img_cond_steps: 1
 
+
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
   project: robomimic-${env}-pretrain
   run: ${now:%H-%M-%S}_${name}
 
+# share image params
+img_h: 64
+img_w: 64
+num_images: 2
+image_keys: ["agentview_image", "robot0_eye_in_hand_image"]
+num_channel: ${eval:'3 * ${num_images}'}
+
 shape_meta:
   obs:
     rgb:
-      shape: [3, 96, 96]  # not counting img_cond_steps
+      shape: [3, 64, 64]  # not counting img_cond_steps
     state:
       shape: [9]
   action: 
@@ -53,8 +61,9 @@ model:
     backbone:
       _target_: model.common.vit.VitEncoder
       obs_shape: ${shape_meta.obs.rgb.shape}
-      # @ JUNTAO: possibly need to multiply by 2 here
-      num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
+      num_channel: ${eval:'${num_channel} * ${img_cond_steps}'} # each image patch is history concatenated
+      img_h: ${img_h}
+      img_w: ${img_w}
       cfg:
         patch_size: 8
         depth: 1

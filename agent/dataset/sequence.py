@@ -11,7 +11,9 @@ import torch
 import logging
 import pickle
 import random
+from einops import rearrange
 from tqdm import tqdm
+import cv2
 
 log = logging.getLogger(__name__)
 
@@ -83,11 +85,16 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
         log.info(f"States shape/type: {self.states.shape, self.states.dtype}")
         log.info(f"Actions shape/type: {self.actions.shape, self.actions.dtype}")
         if self.use_img:
-            breakpoint()
-            # TODO: @JUNTAO, should stack images along channel dimension
-            self.images = torch.from_numpy(dataset["images"][:total_num_steps]).to(
-                device
-            )  # (total_num_steps, C, H, W)
+            # (total_num_steps, num_images, H, W, C) -> (total_num_steps, C*num_images, H, W)
+            # Stack images along the channel dim, place channel first
+            self.images = rearrange(
+                dataset["images"][:total_num_steps], "l n h w c -> l (c n) h w "
+            )
+            # Can debug using:
+            # image = self.images[0]
+            # image = rearrange(image, "(c n) h w -> h (n w) c", c=3, n=2)
+            # cv2.imwrite("temp_after.png", image)
+            self.images = torch.from_numpy(self.images).to(device)
             log.info(f"Images shape/type: {self.images.shape, self.images.dtype}")
 
     def __getitem__(self, idx):

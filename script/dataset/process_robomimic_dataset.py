@@ -84,6 +84,7 @@ import h5py
 import os
 import random
 from copy import deepcopy
+from einops import rearrange
 import logging
 
 
@@ -221,6 +222,16 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
 
         # Concatenate trajectories (no padding)
         for key in ["states", "actions", "rewards", "images"]:
+            if key == "images":
+                out_train[key] = [
+                    rearrange(item, "n t h w c -> t n h w c") for item in out_train[key]
+                ]
+                if val_split > 0:
+                    out_val[key] = [
+                        rearrange(item, "n t h w c -> t n h w c")
+                        for item in out_val[key]
+                    ]
+
             out_train[key] = np.concatenate(out_train[key], axis=0)
 
             # Only concatenate validation set if it exists

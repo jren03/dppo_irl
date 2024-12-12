@@ -195,6 +195,7 @@ class MinVit(nn.Module):
         named_apply(init_weights_vit_timm, self)
 
     def forward(self, x):
+        # x.shape = (B, C, H, W)
         x = self.patch_embed(x)
         x = x + self.pos_embed
         x = self.net(x)
