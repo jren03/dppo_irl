@@ -61,8 +61,8 @@ model:
       _target_: model.common.vit.VitEncoder
       obs_shape: ${shape_meta.obs.rgb.shape}
       num_channel: ${eval:'${num_channel} * ${img_cond_steps}'} # each image patch is history concatenated
-      img_h: ${img_h}
-      img_w: ${img_w}
+      img_h: ${shape_meta.obs.rgb.shape[1]}
+      img_w: ${shape_meta.obs.rgb.shape[2]}
       cfg:
         patch_size: 8
         depth: 1

@@ -7,7 +7,8 @@ _target_: agent.finetune.train_ppo_diffusion_img_agent.TrainPPOImgDiffusionAgent
 
 name: ${env_name}_ft_diffusion_mlp_img_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift/lift_pre_diffusion_mlp_img_ta4_td100/2024-07-30_22-24-35/checkpoint/state_2500.pt
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift/lift_pre_diffusion_mlp_img_ta4_td100/2024-07-30_22-24-35/checkpoint/state_2500.pt
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img_ta4_td100/2024-12-12_16-56-10_42/checkpoint/state_2000.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img/normalization.npz
 
@@ -24,6 +25,9 @@ horizon_steps: 4
 act_steps: 4
 use_ddim: True
 
+num_images: 2
+num_channel: ${eval:'3 * ${num_images}'}
+
 env:
   n_envs: 50
   name: ${env_name}
@@ -38,7 +42,7 @@ env:
                      'robot0_eef_quat',
                      'robot0_gripper_qpos']
       # image_keys: ['robot0_eye_in_hand_image']
-      image_keys: ['agentview_image, robot0_eye_in_hand_image']
+      image_keys: ['agentview_image', 'robot0_eye_in_hand_image']
       shape_meta: ${shape_meta}
     multi_step:
       n_obs_steps: ${cond_steps}
@@ -49,7 +53,8 @@ env:
 shape_meta:
   obs:
     rgb:
-      shape: [3, 96, 96]
+      # shape: [3, 64, 64]
+      shape: [6, 64, 64]
     state:
       shape: [9]
   action: 
@@ -122,7 +127,7 @@ model:
     backbone:
       _target_: model.common.vit.VitEncoder
       obs_shape: ${shape_meta.obs.rgb.shape}
-      num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
+      num_channel: ${eval:'${num_channel} * ${img_cond_steps}'} # each image patch is history concatenated
       img_h: ${shape_meta.obs.rgb.shape[1]}
       img_w: ${shape_meta.obs.rgb.shape[2]}
       cfg:
@@ -148,7 +153,7 @@ model:
     backbone:
       _target_: model.common.vit.VitEncoder
       obs_shape: ${shape_meta.obs.rgb.shape}
-      num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
+      num_channel: ${eval:'${num_channel} * ${img_cond_steps}'} # each image patch is history concatenated
       img_h: ${shape_meta.obs.rgb.shape[1]}
       img_w: ${shape_meta.obs.rgb.shape[2]}
       cfg:

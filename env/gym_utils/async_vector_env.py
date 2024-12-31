@@ -209,9 +209,7 @@ class AsyncVectorEnv(VectorEnv):
                 process.daemon = daemon
                 process.start()
                 child_pipe.close()
-                if (
-                    delay_init
-                ):  # D3IL complains about temporary XML if n_envs is too large. Adding a delay avoids the error.
+                if delay_init:  # D3IL complains about temporary XML if n_envs is too large. Adding a delay avoids the error.
                     time.sleep(0.1)
 
         self._state = AsyncState.DEFAULT

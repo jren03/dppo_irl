@@ -62,7 +62,9 @@ class RobomimicImageWrapper(gym.Env):
         self.low_dim_keys = low_dim_keys
         self.image_keys = image_keys
         self.obs_keys = low_dim_keys + image_keys
+        # print(f"{self.image_keys=}")
         observation_space = spaces.Dict()
+        # print(f"{shape_meta['obs']=}")
         for key, value in shape_meta["obs"].items():
             shape = value["shape"]
             if key.endswith("rgb"):
@@ -78,6 +80,7 @@ class RobomimicImageWrapper(gym.Env):
                 dtype=np.float32,
             )
             observation_space[key] = this_space
+        # print(f"{observation_space=}")
         self.observation_space = observation_space
 
     def normalize_obs(self, obs):

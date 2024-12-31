@@ -291,6 +291,7 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
             logging.info(
                 f"Train - Action dim {action_dim_ind+1} mean {np.mean(action)} std {np.std(action)} min {np.min(action)} max {np.max(action)}"
             )
+        logging.info(f"Images - Shape: {np.array(out_train['images']).shape}")
 
 
 if __name__ == "__main__":
