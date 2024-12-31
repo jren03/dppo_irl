@@ -57,7 +57,6 @@ class EMA:
 
 
 class PreTrainAgent:
-
     def __init__(self, cfg):
         super().__init__()
         self.seed = cfg.get("seed", 42)

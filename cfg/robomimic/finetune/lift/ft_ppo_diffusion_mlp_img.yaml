@@ -98,6 +98,30 @@ train:
   update_epochs: 10
   vf_coef: 0.5
   target_kl: 1
+  # Discriminator specific
+  use_discriminator: True
+  expert_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img/train.npz
+  discriminator:
+    input_dim: ${eval:'${obs_dim} + ${action_dim}'}
+    hidden_dims: [256, 256]
+    activation_type: "ReLU"
+    lr: 1e-4
+    batch_size: 64
+    update_freq: 10
+    update_steps: 4
+    backbone:
+      _target_: model.common.vit.VitEncoder
+      obs_shape: ${shape_meta.obs.rgb.shape}
+      num_channel: ${eval:'${num_channel} * ${img_cond_steps}'} # each image patch is history concatenated
+      img_h: ${shape_meta.obs.rgb.shape[1]}
+      img_w: ${shape_meta.obs.rgb.shape[2]}
+      cfg:
+        patch_size: 8
+        depth: 1
+        embed_dim: 128
+        num_heads: 4
+        embed_style: embed2
+        embed_norm: 0
 
 model:
   _target_: model.diffusion.diffusion_ppo.PPODiffusion

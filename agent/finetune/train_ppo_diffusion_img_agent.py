@@ -3,19 +3,31 @@ DPPO fine-tuning for pixel observations.
 
 """
 
+import logging
+import math
 import os
 import pickle
+import random
+from tqdm import trange
+
 import einops
+import hydra
 import numpy as np
 import torch
-import logging
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+
 import wandb
-import math
 
 log = logging.getLogger(__name__)
-from util.timer import Timer
+wandb.require("core")
+from termcolor import cprint
+import torch.optim as optim
+
 from agent.finetune.train_ppo_diffusion_agent import TrainPPODiffusionAgent
 from model.common.modules import RandomShiftsAug
+from model.irl.discriminator import Discriminator
+from util.timer import Timer
 
 
 class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
@@ -33,6 +45,147 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
 
         # Gradient accumulation to deal with large GPU RAM usage
         self.grad_accumulate = cfg.train.grad_accumulate
+
+        # Load expert dataset
+        self.expert_dataset_path = cfg.train.expert_dataset_path
+        self.expert_observations, self.expert_actions = self.load_expert_dataset(
+            self.expert_dataset_path
+        )
+
+        # Discriminator
+        self.use_discriminator = cfg.train.use_discriminator
+        if self.use_discriminator:
+            cprint("Training with discriminator!", color="blue", attrs=["bold"])
+            backbone = hydra.utils.instantiate(cfg.train.discriminator.backbone)
+            self.discriminator = Discriminator(
+                input_dim=cfg.train.discriminator.input_dim,
+                hidden_dims=cfg.train.discriminator.hidden_dims,
+                activation_type=cfg.train.discriminator.activation_type,
+                backbone=backbone,
+            ).to(self.device)
+            self.discriminator_optimizer = optim.Adam(
+                self.discriminator.parameters(), lr=cfg.train.discriminator.lr
+            )
+            self.discriminator_batch_size = cfg.train.discriminator.batch_size
+            self.discriminator_update_steps = cfg.train.discriminator.update_steps
+            self.discriminator_update_freq = cfg.train.discriminator.update_freq
+
+    def load_expert_dataset(self, path):
+        data = np.load(path)
+        states = torch.tensor(data["states"], dtype=torch.float32)
+        images = torch.tensor(data["images"], dtype=torch.float32)
+        images = einops.rearrange(images, "l n h w c -> l (c n) h w")
+        observations = {"state": states, "rgb": images}
+        actions = torch.tensor(data["actions"], dtype=torch.float32)
+        return observations, actions
+
+    def sample_expert_data(self, batch_size):
+        cprint("[DEBUG]: sampling expert data", color="red", attrs=["bold"])
+        # Assuming expert data is stored in self.expert_dataset
+        indices = random.sample(range(len(self.expert_actions)), batch_size)
+        expert_obs = {
+            "state": torch.stack(
+                [self.expert_observations["state"][i] for i in indices]
+            ),
+            "rgb": torch.stack([self.expert_observations["rgb"][i] for i in indices]),
+        }
+        expert_actions = torch.stack([self.expert_actions[i] for i in indices])
+        return expert_obs, expert_actions
+
+    def sample_agent_data(self, batch_size):
+        cprint("[DEBUG]: sampling agent data", color="red", attrs=["bold"])
+        obs = []
+        actions = []
+        options_venv = [{} for _ in range(self.n_envs)]
+        prev_obs_venv = self.reset_env_all(options_venv=options_venv)
+
+        if batch_size % self.n_envs != 0:
+            raise ValueError("batch_size must be divisible by n_envs")
+        sample_steps = batch_size // self.n_envs
+        for _ in trange(
+            sample_steps, desc=f"Sampling {sample_steps} agent data", leave=False
+        ):
+            # Select action
+            with torch.no_grad():
+                cond = {
+                    key: torch.from_numpy(prev_obs_venv[key]).float().to(self.device)
+                    for key in self.obs_dims
+                }  # batch each type of obs and put into dict
+                samples = self.model(
+                    cond=cond,
+                    deterministic=True,
+                    return_chain=True,
+                )
+                output_venv = (
+                    samples.trajectories.cpu().numpy()
+                )  # n_env x horizon x act
+                # chains_venv = (
+                #     samples.chains.cpu().numpy()
+                # )  # n_env x denoising x horizon x act
+            action_venv = output_venv[:, : self.act_steps]
+
+            # Apply multi-step action
+            obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = (
+                self.venv.step(action_venv)
+            )
+            done_venv = terminated_venv | truncated_venv
+
+            # Flatten observations and actions
+            # obs_venv['rgb'].shape = (n_envs, 1, c, h, w) -> (n_envs, c, h, w)
+            # obs_venv['state'].shape = (n_envs, 1, state_dim) -> (n_envs, state_dim)
+            # action_venv.shape = (n_envs, act_steps, act_dim) -> (n_envs, act_dim)
+            obs_flat = {key: obs_venv[key].squeeze(1) for key in self.obs_dims}
+            actions_flat = action_venv[:, 0, :]
+            obs.extend(
+                [
+                    {key: obs_flat[key][i] for key in self.obs_dims}
+                    for i in range(self.n_envs)
+                ]
+            )
+            actions.extend(actions_flat)
+
+            prev_obs_venv = obs_venv
+
+        # Convert to tensors
+        agent_obs = {
+            key: torch.tensor(
+                np.array([obs[i][key] for i in range(len(obs))]), dtype=torch.float32
+            )
+            for key in self.obs_dims
+        }
+        agent_actions = torch.tensor(actions, dtype=torch.float32)
+        return agent_obs, agent_actions
+
+    def train_discriminator(self):
+        cprint("[DEBUG]: training discriminator", color="red", attrs=["bold"])
+        self.discriminator.train()
+
+        # Sample a batch of expert data
+        expert_obs, expert_actions = self.sample_expert_data(
+            self.discriminator_batch_size
+        )
+
+        # Sample a batch of agent data
+        agent_obs, agent_actions = self.sample_agent_data(self.discriminator_batch_size)
+
+        # Concatenate observations and actions
+        expert_data = {key: expert_obs[key].to(self.device) for key in expert_obs}
+        agent_data = {key: agent_obs[key].to(self.device) for key in agent_obs}
+        expert_data["actions"] = expert_actions.to(self.device)
+        agent_data["actions"] = agent_actions.to(self.device)
+
+        # Compute loss (discriminator is cost in this case)
+        expert_preds = self.discriminator(expert_data)
+        agent_preds = self.discriminator(agent_data)
+        loss = expert_preds.mean() - agent_preds.mean()
+
+        # Backward pass and optimization
+        self.discriminator_optimizer.zero_grad()
+        loss.backward()
+        self.discriminator_optimizer.step()
+
+        log.info(f"Discriminator loss: {loss.item()}")
+        cprint("[DEBUG]: done training discriminator", color="red", attrs=["bold"])
 
     def run(self):
         # Start training loop
@@ -127,6 +280,50 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 # count steps --- not acounting for done within action chunk
                 cnt_train_step += self.n_envs * self.act_steps if not eval_mode else 0
 
+            # Relabel rewards with discriminator if enabled
+            if self.use_discriminator:
+                # obs_trajs.keys() = ('rgb', 'state')
+                # obs_trajs.shape = (n_steps, n_envs, n_cond_steps, obs_dim) --> take last cond_step
+                obs_tensor = {
+                    key: torch.from_numpy(obs_trajs[key][:, :, -1, ...])
+                    .float()
+                    .to(self.device)
+                    for key in self.obs_dims
+                }
+                # chains_traj.shape = (n_steps, n_envs, denoising_steps, act_horizon, act_dim)
+                # TODO for IRL: not sure if should take 0th or -1 idx for denoising step
+                act_tensor = (
+                    torch.from_numpy(chains_trajs[:, :, 0, 0, :])
+                    .float()
+                    .to(self.device)
+                )
+
+                obs_flat = {
+                    key: einops.rearrange(obs_tensor[key], "s e ... -> (s e) ...")
+                    for key in self.obs_dims
+                }
+                act_flat = einops.rearrange(act_tensor, "s e ... -> (s e) ...")
+                combined_data = {key: obs_flat[key] for key in self.obs_dims}
+                combined_data["actions"] = act_flat
+
+                # reward is negative of cost
+                with torch.no_grad():
+                    discriminator_rewards = -self.discriminator(combined_data).squeeze(
+                        -1
+                    )
+                discriminator_rewards = einops.rearrange(
+                    discriminator_rewards,
+                    "(s e) -> s e ",
+                    s=self.n_steps,
+                    e=self.n_envs,
+                )
+                reward_trajs = discriminator_rewards.cpu().numpy()
+                cprint(
+                    "[DEBUG]: Relabeling rewards with discriminator",
+                    color="red",
+                    attrs=["bold"],
+                )
+
             # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
             episodes_start_end = []
             for env_ind in range(self.n_envs):
@@ -168,9 +365,6 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             if not eval_mode:
                 with torch.no_grad():
                     # apply image randomization
-                    # TODO: @JUNTAO, I think env/gym_utils/wrapper/robomimic_image stacks along rgb already,
-                    # so possibly no modification is needed, just need to make sure the encoder
-                    # itself is working correctly.
                     obs_trajs["rgb"] = (
                         torch.from_numpy(obs_trajs["rgb"]).float().to(self.device)
                     )
@@ -395,6 +589,14 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 explained_var = (
                     np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
                 )
+
+            # Update discriminator
+            if (
+                self.use_discriminator
+                and self.itr % self.discriminator_update_freq == 0
+            ):
+                for _ in range(self.discriminator_update_steps):
+                    self.train_discriminator()
 
             # Update lr, min_sampling_std
             if self.itr >= self.n_critic_warmup_itr:
