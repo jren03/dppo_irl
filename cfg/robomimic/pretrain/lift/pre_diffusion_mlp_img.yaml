@@ -8,6 +8,11 @@ _target_: agent.pretrain.train_diffusion_agent.TrainDiffusionAgent
 name: ${env}_pre_diffusion_mlp_img_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img/train.npz
+# train_dataset_path: /share/portal/jlr429/dppo_irl/data/robomimic/${env}-img/train.npz
+
+robomimic_env_cfg_path: cfg/robomimic/env_meta/${env}-img.json
+normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img/normalization.npz
+
 
 seed: 42
 device: cuda:0
@@ -25,8 +30,6 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 # share image params
-img_h: 64
-img_w: 64
 num_images: 2
 image_keys: ["agentview_image", "robot0_eye_in_hand_image"]
 num_channel: ${eval:'3 * ${num_images}'}
@@ -34,14 +37,14 @@ num_channel: ${eval:'3 * ${num_images}'}
 shape_meta:
   obs:
     rgb:
-      shape: [3, 64, 64]  # not counting img_cond_steps
+      shape: [3, 96, 96]  # not counting img_cond_steps
     state:
       shape: [9]
   action: 
     shape: [7]
 
 train:
-  n_epochs: 5000
+  n_epochs: 20000
   batch_size: 256
   learning_rate: 1e-4
   weight_decay: 1e-6
