@@ -8,11 +8,9 @@ _target_: agent.pretrain.train_diffusion_agent.TrainDiffusionAgent
 name: ${env}_pre_diffusion_mlp_img_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img/train.npz
-# train_dataset_path: /share/portal/jlr429/dppo_irl/data/robomimic/${env}-img/train.npz
 
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img/normalization.npz
-
 
 seed: 42
 device: cuda:0
@@ -28,11 +26,6 @@ wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
   project: robomimic-${env}-pretrain
   run: ${now:%H-%M-%S}_${name}
-
-# share image params
-num_images: 2
-image_keys: ["agentview_image", "robot0_eye_in_hand_image"]
-num_channel: ${eval:'3 * ${num_images}'}
 
 shape_meta:
   obs:
@@ -63,7 +56,7 @@ model:
     backbone:
       _target_: model.common.vit.VitEncoder
       obs_shape: ${shape_meta.obs.rgb.shape}
-      num_channel: ${eval:'${num_channel} * ${img_cond_steps}'} # each image patch is history concatenated
+      num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
       img_h: ${shape_meta.obs.rgb.shape[1]}
       img_w: ${shape_meta.obs.rgb.shape[2]}
       cfg:
@@ -73,6 +66,7 @@ model:
         num_heads: 4
         embed_style: embed2
         embed_norm: 0
+    num_img: 2
     img_cond_steps: ${img_cond_steps}
     augment: True
     spatial_emb: 128

@@ -87,12 +87,17 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
         if self.use_img:
             # (total_num_steps, num_images, H, W, C) -> (total_num_steps, C*num_images, H, W)
             # Stack images along the channel dim, place channel first
+            # self.images = rearrange(
+            #     dataset["images"][:total_num_steps], "l n h w c -> l (c n) h w "
+            # )
+            # FIX: place N before C
             self.images = rearrange(
-                dataset["images"][:total_num_steps], "l n h w c -> l (c n) h w "
+                dataset["images"][:total_num_steps], "l n h w c -> l (n c) h w "
             )
             # Can debug using:
             # image = self.images[0]
-            # image = rearrange(image, "(c n) h w -> h (n w) c", c=3, n=2)
+            # image = image[:3, :, :].transpose(1, 2, 0)
+            # # image = rearrange(image, "(c n) h w -> h (n w) c", c=3, n=2)
             # cv2.imwrite("temp_after.png", image)
             self.images = torch.from_numpy(self.images).to(device)
             log.info(f"Images shape/type: {self.images.shape, self.images.dtype}")

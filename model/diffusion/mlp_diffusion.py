@@ -138,8 +138,30 @@ class VisionDiffusionMLP(nn.Module):
 
         # get vit output - pass in two images separately
         if self.num_img > 1:  # TODO: properly handle multiple images
+            assert self.num_img == 2, f"only 2 images supported (got {self.num_img})"
             rgb1 = rgb[:, 0]
             rgb2 = rgb[:, 1]
+
+            # Debug
+            # from PIL import Image
+            # import numpy as np
+            # # Example array
+            # array1 = rgb1[0].cpu().numpy().transpose(1, 2, 0)
+            # array1 = array1.astype(np.uint8)  # Convert to uint8
+            # image1 = Image.fromarray(array1)
+            # # image1.save('eval_rgb1.png')
+            # image1.save('train_rgb1.png')
+
+            # array2 = rgb2[0].cpu().numpy().transpose(1, 2, 0)
+            # array2 = array2.astype(np.uint8)  # Convert to uint8
+            # image2 = Image.fromarray(array2)
+            # # image2.save('eval_rgb2.png')
+            # image2.save('train_rgb2.png')
+
+            # print(np.sum(array1 == array2), array1.shape, array2.shape)
+
+            # breakpoint()
+
             if self.augment:
                 rgb1 = self.aug(rgb1)
                 rgb2 = self.aug(rgb2)
