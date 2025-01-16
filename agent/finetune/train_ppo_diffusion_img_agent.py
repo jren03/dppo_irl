@@ -62,6 +62,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 hidden_dims=cfg.train.discriminator.hidden_dims,
                 activation_type=cfg.train.discriminator.activation_type,
                 backbone=backbone,
+                num_img=cfg.train.discriminator.num_img,
             ).to(self.device)
             self.discriminator_optimizer = optim.Adam(
                 self.discriminator.parameters(), lr=cfg.train.discriminator.lr
@@ -74,7 +75,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         data = np.load(path)
         states = torch.tensor(data["states"], dtype=torch.float32)
         images = torch.tensor(data["images"], dtype=torch.float32)
-        images = einops.rearrange(images, "l n h w c -> l (c n) h w")
+        # images = einops.rearrange(images, "l n h w c -> l (c n) h w")
+        images = einops.rearrange(images, "l n h w c -> l (n c) h w")
         observations = {"state": states, "rgb": images}
         actions = torch.tensor(data["actions"], dtype=torch.float32)
         return observations, actions
@@ -279,6 +281,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
 
                 # count steps --- not acounting for done within action chunk
                 cnt_train_step += self.n_envs * self.act_steps if not eval_mode else 0
+            
+            gt_reward_trajs = reward_trajs.copy()
 
             # Relabel rewards with discriminator if enabled
             if self.use_discriminator:
@@ -324,42 +328,10 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     attrs=["bold"],
                 )
 
-            # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
-            episodes_start_end = []
-            for env_ind in range(self.n_envs):
-                env_steps = np.where(firsts_trajs[:, env_ind] == 1)[0]
-                for i in range(len(env_steps) - 1):
-                    start = env_steps[i]
-                    end = env_steps[i + 1]
-                    if end - start > 1:
-                        episodes_start_end.append((env_ind, start, end - 1))
-            if len(episodes_start_end) > 0:
-                reward_trajs_split = [
-                    reward_trajs[start : end + 1, env_ind]
-                    for env_ind, start, end in episodes_start_end
-                ]
-                num_episode_finished = len(reward_trajs_split)
-                episode_reward = np.array(
-                    [np.sum(reward_traj) for reward_traj in reward_trajs_split]
-                )
-                episode_best_reward = np.array(
-                    [
-                        np.max(reward_traj) / self.act_steps
-                        for reward_traj in reward_trajs_split
-                    ]
-                )
-                avg_episode_reward = np.mean(episode_reward)
-                avg_best_reward = np.mean(episode_best_reward)
-                success_rate = np.mean(
-                    episode_best_reward >= self.best_reward_threshold_for_success
-                )
-            else:
-                episode_reward = np.array([])
-                num_episode_finished = 0
-                avg_episode_reward = 0
-                avg_best_reward = 0
-                success_rate = 0
-                log.info("[WARNING] No episode completed within the iteration!")
+            stats_with_disc_reward = self.summarize_episode_stats(reward_trajs=reward_trajs, firsts_trajs=firsts_trajs)
+            stats = self.summarize_episode_stats(reward_trajs=gt_reward_trajs, firsts_trajs=firsts_trajs)
+            stats["avg_best_reward_disc"] = stats_with_disc_reward["avg_best_reward"]
+            stats["avg_episode_reward_disc"] = stats_with_disc_reward["avg_episode_reward"]
 
             # Update models
             if not eval_mode:
@@ -623,51 +595,116 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 run_results[-1]["time"] = time
                 if eval_mode:
                     log.info(
-                        f"eval: success rate {success_rate:8.4f} | avg episode reward {avg_episode_reward:8.4f} | avg best reward {avg_best_reward:8.4f}"
+                        f"eval: success rate {stats['success_rate']:8.4f}  \
+                        | avg episode reward {stats['avg_episode_reward']:8.4f}  \
+                        | avg best reward {stats['avg_best_reward']:8.4f}"
                     )
-                    if self.use_wandb:
-                        wandb.log(
-                            {
-                                "success rate - eval": success_rate,
-                                "avg episode reward - eval": avg_episode_reward,
-                                "avg best reward - eval": avg_best_reward,
-                                "num episode - eval": num_episode_finished,
-                            },
-                            step=self.itr,
-                            commit=False,
+                    if self.use_discriminator:
+                        log.info(
+                            f"avg episode reward (disc) {stats['avg_episode_reward_disc']:8.4f}  \
+                            | avg best reward (disc) {stats['avg_best_reward_disc']:8.4f}"
                         )
-                    run_results[-1]["eval_success_rate"] = success_rate
-                    run_results[-1]["eval_episode_reward"] = avg_episode_reward
-                    run_results[-1]["eval_best_reward"] = avg_best_reward
+                    if self.use_wandb:
+                        log_stats = {
+                            "success rate - eval": stats['success_rate'],
+                            "avg episode reward - eval": stats['avg_episode_reward'],
+                            "avg best reward - eval": stats['avg_best_reward'],
+                            "num episode - eval": stats['num_episode_finished'],
+                        }
+                        if self.use_discriminator:
+                            log_stats.update({
+                                "avg episode reward - disc": stats['avg_episode_reward_disc'],
+                                "avg best reward - disc": stats['avg_best_reward_disc'],
+                            })
+                        wandb.log(log_stats, step=self.itr, commit=False,)
+                    run_results[-1]["eval_success_rate"] = stats['success_rate']
+                    run_results[-1]["eval_episode_reward"] = stats['avg_episode_reward']
+                    run_results[-1]["eval_best_reward"] = stats['avg_best_reward']
+                    if self.use_discriminator:
+                        run_results[-1]["eval_episode_reward_disc"] = stats['avg_episode_reward_disc']
+                        run_results[-1]["eval_best_reward_disc"] = stats['avg_best_reward_disc']
                 else:
                     log.info(
-                        f"{self.itr}: step {cnt_train_step:8d} | loss {loss:8.4f} | pg loss {pg_loss:8.4f} | value loss {v_loss:8.4f} | bc loss {bc_loss:8.4f} | reward {avg_episode_reward:8.4f} | eta {eta:8.4f} | t:{time:8.4f}"
+                        f"{self.itr}: step {cnt_train_step:8d} | loss {loss:8.4f} | pg loss {pg_loss:8.4f} "
+                        f"| value loss {v_loss:8.4f} | bc loss {bc_loss:8.4f} "
+                        f"| reward {stats['avg_episode_reward']:8.4f} "
+                        + (f"| reward(disc) {stats['avg_episode_reward_disc']:8.4f} " if self.use_discriminator else "")
+                        + f"| eta {eta:8.4f} | t:{time:8.4f}"
                     )
                     if self.use_wandb:
-                        wandb.log(
-                            {
-                                "total env step": cnt_train_step,
-                                "loss": loss,
-                                "pg loss": pg_loss,
-                                "value loss": v_loss,
-                                "bc loss": bc_loss,
-                                "eta": eta,
-                                "approx kl": approx_kl,
-                                "ratio": ratio,
-                                "clipfrac": np.mean(clipfracs),
-                                "explained variance": explained_var,
-                                "avg episode reward - train": avg_episode_reward,
-                                "num episode - train": num_episode_finished,
-                                "diffusion - min sampling std": diffusion_min_sampling_std,
-                                "actor lr": self.actor_optimizer.param_groups[0]["lr"],
-                                "critic lr": self.critic_optimizer.param_groups[0][
-                                    "lr"
-                                ],
-                            },
-                            step=self.itr,
-                            commit=True,
-                        )
-                    run_results[-1]["train_episode_reward"] = avg_episode_reward
+                        log_stats = {
+                            "total env step": cnt_train_step,
+                            "loss": loss,
+                            "pg loss": pg_loss,
+                            "value loss": v_loss,
+                            "bc loss": bc_loss,
+                            "eta": eta,
+                            "approx kl": approx_kl,
+                            "ratio": ratio,
+                            "clipfrac": np.mean(clipfracs),
+                            "explained variance": explained_var,
+                            "avg episode reward - train": stats['avg_episode_reward'],
+                            "num episode - train": stats['num_episode_finished'],
+                            "diffusion - min sampling std": diffusion_min_sampling_std,
+                            "actor lr": self.actor_optimizer.param_groups[0]["lr"],
+                            "critic lr": self.critic_optimizer.param_groups[0][
+                                "lr"
+                            ],
+                        }
+                        if self.use_discriminator:
+                            log_stats["avg episode reward (disc) - train"] = stats["avg_episode_reward_disc"]
+                        wandb.log(log_stats, step=self.itr, commit=True)
+                    run_results[-1]["train_episode_reward"] = stats['avg_episode_reward']
+                    if self.use_discriminator:
+                        run_results[-1]["train_episode_reward_disc"] = stats['avg_episode_reward_disc']
                 with open(self.result_path, "wb") as f:
                     pickle.dump(run_results, f)
             self.itr += 1
+    
+    def summarize_episode_stats(self, reward_trajs, firsts_trajs):
+        # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
+        episodes_start_end = []
+        for env_ind in range(self.n_envs):
+            env_steps = np.where(firsts_trajs[:, env_ind] == 1)[0]
+            for i in range(len(env_steps) - 1):
+                start = env_steps[i]
+                end = env_steps[i + 1]
+                if end - start > 1:
+                    episodes_start_end.append((env_ind, start, end - 1))
+        if len(episodes_start_end) > 0:
+            reward_trajs_split = [
+                reward_trajs[start : end + 1, env_ind]
+                for env_ind, start, end in episodes_start_end
+            ]
+            num_episode_finished = len(reward_trajs_split)
+            episode_reward = np.array(
+                [np.sum(reward_traj) for reward_traj in reward_trajs_split]
+            )
+            episode_best_reward = np.array(
+                [
+                    np.max(reward_traj) / self.act_steps
+                    for reward_traj in reward_trajs_split
+                ]
+            )
+            avg_episode_reward = np.mean(episode_reward)
+            avg_best_reward = np.mean(episode_best_reward)
+            success_rate = np.mean(
+                episode_best_reward >= self.best_reward_threshold_for_success
+            )
+        else:
+            episode_reward = np.array([])
+            num_episode_finished = 0
+            avg_episode_reward = 0
+            avg_best_reward = 0
+            success_rate = 0
+            log.info("[WARNING] No episode completed within the iteration!")
+
+        stats = {
+            "episode_reward": episode_reward,
+            "num_episode_finished": num_episode_finished,
+            "avg_episode_reward": avg_episode_reward,
+            "avg_best_reward": avg_best_reward,
+            "success_rate": success_rate
+        }
+
+        return stats

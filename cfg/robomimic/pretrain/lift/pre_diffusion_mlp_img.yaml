@@ -7,10 +7,10 @@ _target_: agent.pretrain.train_diffusion_agent.TrainDiffusionAgent
 
 name: ${env}_pre_diffusion_mlp_img_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img/train.npz
+train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img-10demos/train.npz
 
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env}-img.json
-normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img/normalization.npz
+normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img-10demos/normalization.npz
 
 seed: 42
 device: cuda:0
