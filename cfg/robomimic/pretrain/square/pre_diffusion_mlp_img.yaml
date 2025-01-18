@@ -5,9 +5,11 @@ hydra:
     dir: ${logdir}
 _target_: agent.pretrain.train_diffusion_agent.TrainDiffusionAgent
 
-name: ${env}_pre_diffusion_mlp_img_ta${horizon_steps}_td${denoising_steps}
+name: ${env}_pre_diffusion_mlp_img${img_size}_demo${n_demos}_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img/train.npz
+train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img${img_size}-${n_demos}demos/train.npz
+robomimic_env_cfg_path: cfg/robomimic/env_meta/${env}-img${img_size}.json
+normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img${img_size}-${n_demos}demos/normalization.npz
 
 seed: 42
 device: cuda:0
@@ -19,6 +21,9 @@ horizon_steps: 4
 cond_steps: 1
 img_cond_steps: 1
 
+n_demos: 50
+img_size: 224
+
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
   project: robomimic-${env}-pretrain
@@ -27,14 +32,14 @@ wandb:
 shape_meta:
   obs:
     rgb:
-      shape: [3, 96, 96]  # not counting img_cond_steps
+      shape: [3, '${img_size}', '${img_size}']  # not counting img_cond_steps
     state:
       shape: [9]
   action: 
     shape: [7]
 
 train:
-  n_epochs: 2000
+  n_epochs: 20000
   batch_size: 256
   learning_rate: 1e-4
   weight_decay: 1e-6
@@ -42,7 +47,7 @@ train:
     first_cycle_steps: 2000
     warmup_steps: 100
     min_lr: 1e-5
-  save_model_freq: 500
+  save_model_freq: 1000
 
 model:
   _target_: model.diffusion.diffusion.DiffusionModel
@@ -54,6 +59,8 @@ model:
       _target_: model.common.vit.VitEncoder
       obs_shape: ${shape_meta.obs.rgb.shape}
       num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
+      img_h: ${shape_meta.obs.rgb.shape[1]}
+      img_w: ${shape_meta.obs.rgb.shape[2]}
       cfg:
         patch_size: 8
         depth: 1
@@ -61,12 +68,13 @@ model:
         num_heads: 4
         embed_style: embed2
         embed_norm: 0
+    num_img: 2
+    img_cond_steps: ${img_cond_steps}
     augment: True
     spatial_emb: 128
     time_dim: 32
-    mlp_dims: [768, 768, 768]
+    mlp_dims: [512, 512, 512]   # originally [768, 768, 768]
     residual_style: True
-    img_cond_steps: ${img_cond_steps}
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
     horizon_steps: ${horizon_steps}
     action_dim: ${action_dim}

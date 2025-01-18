@@ -5,12 +5,13 @@ hydra:
     dir: ${logdir}
 _target_: agent.finetune.train_ppo_diffusion_img_agent.TrainPPOImgDiffusionAgent
 
-name: ${env_name}_ft_diffusion_mlp_img_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
+name: ${env_name}_ft_diffusion_mlp_img${img_size}_demo${n_demos}_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img_ta4_td100/2025-01-15_01-07-45_42/checkpoint/state_3000.pt
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img_ta4_td100/2025-01-15_20-43-44_42/checkpoint/state_10000.pt
-robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img.json
-normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img-10demos/normalization.npz
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img_ta4_td100/2025-01-15_20-43-44_42/checkpoint/state_10000.pt
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img224_demo5_ta4_td100/2025-01-17_13-17-03_42/checkpoint/state_20000.pt
+robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img${img_size}.json
+normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos/normalization.npz
 
 seed: 42
 device: cuda:0
@@ -25,17 +26,20 @@ horizon_steps: 4
 act_steps: 4
 use_ddim: True
 
+n_demos: 5
+img_size: 224
+
 shape_meta:
   obs:
     rgb:
-      shape: [6, 96, 96]
+      shape: [6, '${img_size}', '${img_size}']
     state:
       shape: [9]
   action: 
     shape: [7]
 
 env:
-  n_envs: 50
+  n_envs: 16
   name: ${env_name}
   best_reward_threshold_for_success: 1
   max_episode_steps: 300
@@ -88,26 +92,26 @@ train:
   reward_scale_running: True
   reward_scale_const: 1.0
   gae_lambda: 0.95
-  batch_size: 500
-  logprob_batch_size: 500
+  batch_size: 16
+  logprob_batch_size: 16
   update_epochs: 10
   vf_coef: 0.5
   target_kl: 1
   # Discriminator specific
   use_discriminator: True
-  expert_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img/train.npz
+  expert_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos/train.npz
   discriminator:
     input_dim: ${eval:'${obs_dim} + ${action_dim}'}
     hidden_dims: [256, 256]
     activation_type: "ReLU"
     lr: 1e-4
-    batch_size: 500
+    batch_size: 16
     update_freq: 1
-    update_steps: 4
+    update_steps: 20
     num_img: 2
     backbone:
       _target_: model.common.vit.VitEncoder
-      obs_shape: [3, 96, 96]
+      obs_shape: [3, '${img_size}', '${img_size}']
       num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
       img_h: ${shape_meta.obs.rgb.shape[1]}
       img_w: ${shape_meta.obs.rgb.shape[2]}
@@ -146,7 +150,7 @@ model:
     _target_: model.diffusion.mlp_diffusion.VisionDiffusionMLP
     backbone:
       _target_: model.common.vit.VitEncoder
-      obs_shape: [3, 96, 96]
+      obs_shape: [3, '${img_size}', '${img_size}']
       num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
       img_h: ${shape_meta.obs.rgb.shape[1]}
       img_w: ${shape_meta.obs.rgb.shape[2]}
@@ -173,7 +177,7 @@ model:
     augment: False
     backbone:
       _target_: model.common.vit.VitEncoder
-      obs_shape: [3, 96, 96]
+      obs_shape: [3, '${img_size}', '${img_size}']
       num_channel: ${eval:'3 * ${img_cond_steps}'} # each image patch is history concatenated
       img_h: ${shape_meta.obs.rgb.shape[1]}
       img_w: ${shape_meta.obs.rgb.shape[2]}
