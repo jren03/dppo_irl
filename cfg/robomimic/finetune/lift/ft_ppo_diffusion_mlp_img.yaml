@@ -70,7 +70,7 @@ train:
   n_steps: 300
   gamma: 0.999
   augment: True
-  grad_accumulate: 15
+  grad_accumulate: 150
   actor_lr: 5e-5
   actor_weight_decay: 0
   actor_lr_scheduler:
@@ -107,7 +107,7 @@ train:
     lr: 1e-4
     batch_size: 16
     update_freq: 1
-    update_steps: 20
+    update_steps: 40
     num_img: 2
     backbone:
       _target_: model.common.vit.VitEncoder
