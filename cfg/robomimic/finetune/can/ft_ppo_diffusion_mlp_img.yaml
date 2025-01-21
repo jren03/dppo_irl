@@ -105,9 +105,11 @@ train:
     hidden_dims: [256, 256]
     activation_type: "ReLU"
     lr: 1e-4
+    update_epochs: 1
     batch_size: 16
     update_freq: 1
-    update_steps: 100
+    update_steps: 75
+    grad_accumulate: 15
     num_img: 2
     backbone:
       _target_: model.common.vit.VitEncoder

@@ -67,9 +67,12 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             self.discriminator_optimizer = optim.Adam(
                 self.discriminator.parameters(), lr=cfg.train.discriminator.lr
             )
+            self.discriminator_optimizer.zero_grad()
+            self.discriminator_update_epochs = cfg.train.discriminator.update_epochs
             self.discriminator_batch_size = cfg.train.discriminator.batch_size
             self.discriminator_update_steps = cfg.train.discriminator.update_steps
             self.discriminator_update_freq = cfg.train.discriminator.update_freq
+            self.discriminator_grad_accumulate = cfg.train.discriminator.grad_accumulate
 
     def load_expert_dataset(self, path):
         data = np.load(path)
@@ -82,7 +85,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         return observations, actions
 
     def sample_expert_data(self, batch_size):
-        cprint("[DEBUG]: sampling expert data", color="red", attrs=["bold"])
+        # cprint("[DEBUG]: sampling expert data", color="red", attrs=["bold"])
         # Assuming expert data is stored in self.expert_dataset
         indices = random.sample(range(len(self.expert_actions)), batch_size)
         expert_obs = {
@@ -95,7 +98,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         return expert_obs, expert_actions
 
     def sample_agent_data(self, batch_size):
-        cprint("[DEBUG]: sampling agent data", color="red", attrs=["bold"])
+        # cprint("[DEBUG]: sampling agent data", color="red", attrs=["bold"])
         obs = []
         actions = []
         options_venv = [{} for _ in range(self.n_envs)]
@@ -158,8 +161,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         agent_actions = torch.tensor(actions, dtype=torch.float32)
         return agent_obs, agent_actions
 
-    def train_discriminator(self):
-        cprint("[DEBUG]: training discriminator", color="red", attrs=["bold"])
+    def train_discriminator(self, update_grad=True):
+        # cprint("[DEBUG]: training discriminator", color="red", attrs=["bold"])
         self.discriminator.train()
 
         # Sample a batch of expert data
@@ -168,7 +171,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         )
 
         # Sample a batch of agent data
-        agent_obs, agent_actions = self.sample_agent_data(self.discriminator_batch_size)
+        agent_obs, agent_actions = self.sample_agent_data(self.discriminator_batch_size)    # agent_obs: rgb: (B, 6, 224, 224), state: (B, 9) # agent actions: (B, 7)
 
         # Concatenate observations and actions
         expert_data = {key: expert_obs[key].to(self.device) for key in expert_obs}
@@ -179,15 +182,19 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         # Compute loss (discriminator is cost in this case)
         expert_preds = self.discriminator(expert_data)
         agent_preds = self.discriminator(agent_data)
-        loss = expert_preds.mean() - agent_preds.mean()
+        expert_preds_mean = expert_preds.mean()
+        agent_preds_mean = agent_preds.mean()
+        loss = expert_preds_mean - agent_preds_mean
 
         # Backward pass and optimization
-        self.discriminator_optimizer.zero_grad()
         loss.backward()
-        self.discriminator_optimizer.step()
+        if update_grad:
+            self.discriminator_optimizer.step()
+            self.discriminator_optimizer.zero_grad()
+            log.info(f"run grad update for discriminator")
 
-        log.info(f"Discriminator loss: {loss.item()}")
-        cprint("[DEBUG]: done training discriminator", color="red", attrs=["bold"])
+        log.info(f"Discriminator loss: {loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}")
+        # cprint("[DEBUG]: done training discriminator", color="red", attrs=["bold"])
 
     def run(self):
         # Start training loop
@@ -235,6 +242,13 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     self.action_dim,
                 )
             )
+            # act_trajs = np.zeros(
+            #     (
+            #         self.n_steps,
+            #         self.n_envs,
+            #         self.action_dim,
+            #     )
+            # )
             terminated_trajs = np.zeros((self.n_steps, self.n_envs))
             reward_trajs = np.zeros((self.n_steps, self.n_envs))
 
@@ -271,6 +285,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 done_venv = terminated_venv | truncated_venv
                 for k in obs_trajs:
                     obs_trajs[k][step] = prev_obs_venv[k]
+                # act_trajs[step] = output_venv[:, 0, :]  # take the first action in horizon
                 chains_trajs[step] = chains_venv
                 reward_trajs[step] = reward_venv
                 terminated_trajs[step] = terminated_venv
@@ -286,6 +301,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
 
             # Relabel rewards with discriminator if enabled
             if self.use_discriminator:
+                self.discriminator.eval()   # turn to eval mode
                 # obs_trajs.keys() = ('rgb', 'state')
                 # obs_trajs.shape = (n_steps, n_envs, n_cond_steps, obs_dim) --> take last cond_step
                 obs_tensor = {
@@ -296,8 +312,9 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 }
                 # chains_traj.shape = (n_steps, n_envs, denoising_steps, act_horizon, act_dim)
                 # TODO for IRL: not sure if should take 0th or -1 idx for denoising step
+                # print("np.all(chains_trajs[:, :, -1, 0, :] == act_trajs)", np.all(chains_trajs[:, :, -1, 0, :] == act_trajs))
                 act_tensor = (
-                    torch.from_numpy(chains_trajs[:, :, 0, 0, :])
+                    torch.from_numpy(chains_trajs[:, :, -1, 0, :])  # torch.from_numpy(act_trajs)
                     .float()
                     .to(self.device)
                 )
@@ -448,6 +465,11 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     )
                     for k in obs_trajs
                 }
+                if self.use_discriminator:
+                    act_k = einops.rearrange(
+                        torch.from_numpy(chains_trajs[:, :, -1, 0, :]).float().to(self.device),
+                        "s e ... -> (s e) ...",
+                    )
                 chains_k = einops.rearrange(
                     torch.tensor(chains_trajs, device=self.device).float(),
                     "s e t h d -> (s e) t h d",
@@ -523,6 +545,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                         loss.backward()
                         if (batch + 1) % self.grad_accumulate == 0:
                             if self.itr >= self.n_critic_warmup_itr:
+                                log.info(f"Updating actor")
                                 if self.max_grad_norm is not None:
                                     torch.nn.utils.clip_grad_norm_(
                                         self.model.actor_ft.parameters(),
@@ -534,6 +557,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                                     and batch % self.eta_update_interval == 0
                                 ):
                                     self.eta_optimizer.step()
+                            else:
+                                log.info(f"NOT updating actor")
                             self.critic_optimizer.step()
                             self.actor_optimizer.zero_grad()
                             self.critic_optimizer.zero_grad()
@@ -562,13 +587,56 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
                 )
 
-            # Update discriminator
-            if (
-                self.use_discriminator
-                and self.itr % self.discriminator_update_freq == 0
-            ):
-                for _ in range(self.discriminator_update_steps):
-                    self.train_discriminator()
+                # # Update discriminator
+                # if (
+                #     self.use_discriminator
+                #     and ((self.itr == 1) or (self.itr % self.discriminator_update_freq == 0))
+                # ):
+                #     for i in range(self.discriminator_update_steps):
+                #         self.train_discriminator(update_grad=((i + 1) % self.discriminator_grad_accumulate == 0))
+                                
+                # update discriminator
+                if self.use_discriminator:
+                    self.discriminator.train()  # turn to train mode
+
+                    total_steps = self.n_steps * self.n_envs
+                    for update_epoch in range(self.discriminator_update_epochs):
+                        # for each epoch, go through all data in batches
+                        inds_k = torch.randperm(total_steps, device=self.device)
+                        num_batch = max(1, total_steps // self.discriminator_batch_size)  # skip last ones
+                        for batch in range(num_batch):
+                            # Prepare agent data
+                            start = batch * self.discriminator_batch_size
+                            end = start + self.discriminator_batch_size
+                            inds_b = inds_k[start:end]  # b for batch
+                            batch_inds_b = inds_b
+                            assert self.n_cond_step == 1
+                            for k, v in obs_k.items():
+                                assert v.shape[1] == 1
+                            agent_obs = {k: obs_k[k][batch_inds_b][:, -1, ...] for k in obs_k}
+                            agent_actions = act_k[batch_inds_b]
+                            agent_data = {key: agent_obs[key] for key in agent_obs}
+                            agent_data["actions"] = agent_actions
+
+                            # Sample a batch of expert data
+                            expert_obs, expert_actions = self.sample_expert_data(self.discriminator_batch_size)
+                            expert_data = {key: expert_obs[key].to(self.device) for key in expert_obs}
+                            expert_data["actions"] = expert_actions.to(self.device)
+
+                            # Compute loss (discriminator is cost in this case)
+                            expert_preds = self.discriminator(expert_data)
+                            agent_preds = self.discriminator(agent_data)
+                            expert_preds_mean = expert_preds.mean()
+                            agent_preds_mean = agent_preds.mean()
+                            loss = expert_preds_mean - agent_preds_mean
+
+                            # Backward pass and optimization
+                            loss.backward()
+                            if (batch + 1) % self.discriminator_grad_accumulate == 0:
+                                self.discriminator_optimizer.step()
+                                self.discriminator_optimizer.zero_grad()
+                                log.info(f"run grad update for discriminator")
+                                log.info(f"Discriminator loss: {loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
 
             # Update lr, min_sampling_std
             if self.itr >= self.n_critic_warmup_itr:
