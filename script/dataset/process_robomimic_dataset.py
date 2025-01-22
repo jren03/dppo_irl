@@ -88,7 +88,8 @@ from einops import rearrange
 import logging
 
 
-def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
+def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize, custom_normalization_path=None):
+
     # Load hdf5 file from load_path
     with h5py.File(load_path, "r") as f:
         # Sort demonstrations in increasing episode order
@@ -132,6 +133,16 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
         action_min = np.inf * np.ones((action_dim))
         action_max = -np.inf * np.ones((action_dim))
 
+        use_custom_norm = custom_normalization_path is not None
+        if use_custom_norm:
+            logging.info(f"Using custom normalization from {custom_normalization_path}")
+            with np.load(custom_normalization_path) as norm:
+                obs_min = norm["obs_min"]
+                obs_max = norm["obs_max"]
+                action_min = norm["action_min"]
+                action_max = norm["action_max"]
+            
+
         # Process each demo
         for ep in demos:
             traj_lengths.append(f[f"data/{ep}/actions"].shape[0])
@@ -142,10 +153,12 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize):
                 ]
             )
             actions = f[f"data/{ep}/actions"][()]
-            obs_min = np.minimum(obs_min, np.min(obs, axis=0))
-            obs_max = np.maximum(obs_max, np.max(obs, axis=0))
-            action_min = np.minimum(action_min, np.min(actions, axis=0))
-            action_max = np.maximum(action_max, np.max(actions, axis=0))
+
+            if not use_custom_norm:
+                obs_min = np.minimum(obs_min, np.min(obs, axis=0))
+                obs_max = np.maximum(obs_max, np.max(obs, axis=0))
+                action_min = np.minimum(action_min, np.min(actions, axis=0))
+                action_max = np.maximum(action_max, np.max(actions, axis=0))
 
         traj_lengths = np.array(traj_lengths)
 
@@ -304,6 +317,7 @@ if __name__ == "__main__":
     parser.add_argument("--val_split", type=float, default="0")
     parser.add_argument("--max_episodes", type=int, default="-1")
     parser.add_argument("--normalize", action="store_true")
+    parser.add_argument("--custom_normalization_path", type=str, default=None)
     parser.add_argument("--cameras", nargs="*", default=None)
     args = parser.parse_args()
 
@@ -330,4 +344,5 @@ if __name__ == "__main__":
         args.save_name_prefix,
         args.val_split,
         args.normalize,
+        args.custom_normalization_path,
     )

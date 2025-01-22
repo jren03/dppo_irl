@@ -73,6 +73,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             self.discriminator_update_steps = cfg.train.discriminator.update_steps
             self.discriminator_update_freq = cfg.train.discriminator.update_freq
             self.discriminator_grad_accumulate = cfg.train.discriminator.grad_accumulate
+            self.n_discriminator_warmup_itr = cfg.train.discriminator.n_discriminator_warmup_itr
 
     def load_expert_dataset(self, path):
         data = np.load(path)
@@ -213,7 +214,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     )
 
             # Define train or eval - all envs restart
-            eval_mode = self.itr % self.val_freq == 0 and not self.force_train
+            eval_mode = self.itr % self.val_freq == 0 and not self.force_train and (self.itr == 0 or self.itr > self.n_critic_warmup_itr)
             self.model.eval() if eval_mode else self.model.train()
             last_itr_eval = eval_mode
 
@@ -544,8 +545,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                         # update policy and critic
                         loss.backward()
                         if (batch + 1) % self.grad_accumulate == 0:
-                            if self.itr >= self.n_critic_warmup_itr:
-                                log.info(f"Updating actor")
+                            if self.itr > self.n_critic_warmup_itr:
                                 if self.max_grad_norm is not None:
                                     torch.nn.utils.clip_grad_norm_(
                                         self.model.actor_ft.parameters(),
@@ -559,7 +559,11 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                                     self.eta_optimizer.step()
                             else:
                                 log.info(f"NOT updating actor")
-                            self.critic_optimizer.step()
+
+                            if self.itr > self.n_discriminator_warmup_itr:
+                                self.critic_optimizer.step()
+                            else:
+                                log.info(f"NOT updating critic")
                             self.actor_optimizer.zero_grad()
                             self.critic_optimizer.zero_grad()
                             if self.learn_eta:
@@ -596,7 +600,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 #         self.train_discriminator(update_grad=((i + 1) % self.discriminator_grad_accumulate == 0))
                                 
                 # update discriminator
-                if self.use_discriminator:
+                if self.use_discriminator and ((self.itr == 1) or (self.itr % self.discriminator_update_freq == 0)):
                     self.discriminator.train()  # turn to train mode
 
                     total_steps = self.n_steps * self.n_envs
@@ -623,6 +627,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                             expert_data = {key: expert_obs[key].to(self.device) for key in expert_obs}
                             expert_data["actions"] = expert_actions.to(self.device)
 
+                            # breakpoint()
+
                             # Compute loss (discriminator is cost in this case)
                             expert_preds = self.discriminator(expert_data)
                             agent_preds = self.discriminator(agent_data)
@@ -639,7 +645,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                                 log.info(f"Discriminator loss: {loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
 
             # Update lr, min_sampling_std
-            if self.itr >= self.n_critic_warmup_itr:
+            if self.itr > self.n_critic_warmup_itr:
                 self.actor_lr_scheduler.step()
                 if self.learn_eta:
                     self.eta_lr_scheduler.step()
