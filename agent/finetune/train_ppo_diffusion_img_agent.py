@@ -26,7 +26,7 @@ import torch.optim as optim
 
 from agent.finetune.train_ppo_diffusion_agent import TrainPPODiffusionAgent
 from model.common.modules import RandomShiftsAug
-from model.irl.discriminator import Discriminator
+from model.irl.discriminator import Discriminator, gradient_penalty
 from util.timer import Timer
 
 
@@ -67,34 +67,50 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             self.discriminator_optimizer = optim.Adam(
                 self.discriminator.parameters(), lr=cfg.train.discriminator.lr
             )
+            from util.scheduler import CosineAnnealingWarmupRestarts
+            self.discriminator_lr_scheduler = CosineAnnealingWarmupRestarts(
+                self.discriminator_optimizer,
+                first_cycle_steps=cfg.train.discriminator.lr_scheduler.first_cycle_steps,
+                cycle_mult=1.0,
+                max_lr=cfg.train.discriminator.lr,
+                min_lr=cfg.train.discriminator.lr_scheduler.min_lr,
+                warmup_steps=cfg.train.discriminator.lr_scheduler.warmup_steps,
+                gamma=1.0,
+            )
             self.discriminator_optimizer.zero_grad()
             self.discriminator_update_epochs = cfg.train.discriminator.update_epochs
             self.discriminator_batch_size = cfg.train.discriminator.batch_size
-            self.discriminator_update_steps = cfg.train.discriminator.update_steps
+            # self.discriminator_update_steps = cfg.train.discriminator.update_steps
             self.discriminator_update_freq = cfg.train.discriminator.update_freq
             self.discriminator_grad_accumulate = cfg.train.discriminator.grad_accumulate
             self.n_discriminator_warmup_itr = cfg.train.discriminator.n_discriminator_warmup_itr
+            self.discriminator_gp_scale = cfg.train.discriminator.gp_scale
 
     def load_expert_dataset(self, path):
         data = np.load(path)
         states = torch.tensor(data["states"], dtype=torch.float32)
-        images = torch.tensor(data["images"], dtype=torch.float32)
-        # images = einops.rearrange(images, "l n h w c -> l (c n) h w")
-        images = einops.rearrange(images, "l n h w c -> l (n c) h w")
-        observations = {"state": states, "rgb": images}
+        if "images" in data:
+            images = torch.tensor(data["images"], dtype=torch.float32)
+            # images = einops.rearrange(images, "l n h w c -> l (c n) h w")
+            images = einops.rearrange(images, "l n h w c -> l (n c) h w")
+            observations = {"state": states, "rgb": images}
+        else:
+            observations = {"state": states}
         actions = torch.tensor(data["actions"], dtype=torch.float32)
         return observations, actions
 
     def sample_expert_data(self, batch_size):
         # cprint("[DEBUG]: sampling expert data", color="red", attrs=["bold"])
         # Assuming expert data is stored in self.expert_dataset
-        indices = random.sample(range(len(self.expert_actions)), batch_size)
+        # indices = random.sample(range(len(self.expert_actions)), batch_size)
+        indices = np.random.choice(len(self.expert_actions), batch_size, replace=(len(self.expert_actions) < batch_size))
         expert_obs = {
             "state": torch.stack(
                 [self.expert_observations["state"][i] for i in indices]
             ),
-            "rgb": torch.stack([self.expert_observations["rgb"][i] for i in indices]),
         }
+        if "rgb" in self.expert_observations:
+            expert_obs["rgb"] = torch.stack([self.expert_observations["rgb"][i] for i in indices])
         expert_actions = torch.stack([self.expert_actions[i] for i in indices])
         return expert_obs, expert_actions
 
@@ -297,7 +313,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
 
                 # count steps --- not acounting for done within action chunk
                 cnt_train_step += self.n_envs * self.act_steps if not eval_mode else 0
-            
+
             gt_reward_trajs = reward_trajs.copy()
 
             # Relabel rewards with discriminator if enabled
@@ -345,6 +361,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     color="red",
                     attrs=["bold"],
                 )
+                log.info(f"Discriminator reward mean: {reward_trajs.mean()}, std: {reward_trajs.std()}, min: {reward_trajs.min()}, max: {reward_trajs.max()}")
 
             stats_with_disc_reward = self.summarize_episode_stats(reward_trajs=reward_trajs, firsts_trajs=firsts_trajs)
             stats = self.summarize_episode_stats(reward_trajs=gt_reward_trajs, firsts_trajs=firsts_trajs)
@@ -488,108 +505,116 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 )
                 logprobs_k = torch.tensor(logprobs_trajs, device=self.device).float()
 
-                # Update policy and critic
-                total_steps = self.n_steps * self.n_envs * self.model.ft_denoising_steps
-                clipfracs = []
-                for update_epoch in range(self.update_epochs):
-                    # for each epoch, go through all data in batches
-                    flag_break = False
-                    inds_k = torch.randperm(total_steps, device=self.device)
-                    num_batch = max(1, total_steps // self.batch_size)  # skip last ones
-                    for batch in range(num_batch):
-                        start = batch * self.batch_size
-                        end = start + self.batch_size
-                        inds_b = inds_k[start:end]  # b for batch
-                        batch_inds_b, denoising_inds_b = torch.unravel_index(
-                            inds_b,
-                            (self.n_steps * self.n_envs, self.model.ft_denoising_steps),
-                        )
-                        obs_b = {k: obs_k[k][batch_inds_b] for k in obs_k}
-                        chains_prev_b = chains_k[batch_inds_b, denoising_inds_b]
-                        chains_next_b = chains_k[batch_inds_b, denoising_inds_b + 1]
-                        returns_b = returns_k[batch_inds_b]
-                        values_b = values_k[batch_inds_b]
-                        advantages_b = advantages_k[batch_inds_b]
-                        logprobs_b = logprobs_k[batch_inds_b, denoising_inds_b]
 
-                        # get loss
-                        (
-                            pg_loss,
-                            entropy_loss,
-                            v_loss,
-                            clipfrac,
-                            approx_kl,
-                            ratio,
-                            bc_loss,
-                            eta,
-                        ) = self.model.loss(
-                            obs_b,
-                            chains_prev_b,
-                            chains_next_b,
-                            denoising_inds_b,
-                            returns_b,
-                            values_b,
-                            advantages_b,
-                            logprobs_b,
-                            use_bc_loss=self.use_bc_loss,
-                            reward_horizon=self.reward_horizon,
-                        )
-                        loss = (
-                            pg_loss
-                            + entropy_loss * self.ent_coef
-                            + v_loss * self.vf_coef
-                            + bc_loss * self.bc_loss_coeff
-                        )
-                        clipfracs += [clipfrac]
-
-                        # update policy and critic
-                        loss.backward()
-                        if (batch + 1) % self.grad_accumulate == 0:
-                            if self.itr > self.n_critic_warmup_itr:
-                                if self.max_grad_norm is not None:
-                                    torch.nn.utils.clip_grad_norm_(
-                                        self.model.actor_ft.parameters(),
-                                        self.max_grad_norm,
-                                    )
-                                self.actor_optimizer.step()
-                                if (
-                                    self.learn_eta
-                                    and batch % self.eta_update_interval == 0
-                                ):
-                                    self.eta_optimizer.step()
-                            else:
-                                log.info(f"NOT updating actor")
-
-                            if self.itr > self.n_discriminator_warmup_itr:
-                                self.critic_optimizer.step()
-                            else:
-                                log.info(f"NOT updating critic")
-                            self.actor_optimizer.zero_grad()
-                            self.critic_optimizer.zero_grad()
-                            if self.learn_eta:
-                                self.eta_optimizer.zero_grad()
-                            log.info(f"run grad update at batch {batch}")
-                            log.info(
-                                f"approx_kl: {approx_kl}, update_epoch: {update_epoch}, num_batch: {num_batch}"
+                if not (self.use_discriminator and self.itr <= self.n_discriminator_warmup_itr):
+                    # Update policy and critic
+                    total_steps = self.n_steps * self.n_envs * self.model.ft_denoising_steps
+                    clipfracs = []
+                    for update_epoch in range(self.update_epochs):
+                        # for each epoch, go through all data in batches
+                        flag_break = False
+                        inds_k = torch.randperm(total_steps, device=self.device)
+                        num_batch = max(1, total_steps // self.batch_size)  # skip last ones
+                        for batch in range(num_batch):
+                            start = batch * self.batch_size
+                            end = start + self.batch_size
+                            inds_b = inds_k[start:end]  # b for batch
+                            batch_inds_b, denoising_inds_b = torch.unravel_index(
+                                inds_b,
+                                (self.n_steps * self.n_envs, self.model.ft_denoising_steps),
                             )
+                            obs_b = {k: obs_k[k][batch_inds_b] for k in obs_k}
+                            chains_prev_b = chains_k[batch_inds_b, denoising_inds_b]
+                            chains_next_b = chains_k[batch_inds_b, denoising_inds_b + 1]
+                            returns_b = returns_k[batch_inds_b]
+                            values_b = values_k[batch_inds_b]
+                            advantages_b = advantages_k[batch_inds_b]
+                            logprobs_b = logprobs_k[batch_inds_b, denoising_inds_b]
 
-                            # Stop gradient update if KL difference reaches target
-                            if (
-                                self.target_kl is not None
-                                and approx_kl > self.target_kl
-                                and self.itr >= self.n_critic_warmup_itr
-                            ):
-                                flag_break = True
-                                break
-                    if flag_break:
-                        break
+                            # get loss
+                            (
+                                pg_loss,
+                                entropy_loss,
+                                v_loss,
+                                clipfrac,
+                                approx_kl,
+                                ratio,
+                                bc_loss,
+                                eta,
+                            ) = self.model.loss(
+                                obs_b,
+                                chains_prev_b,
+                                chains_next_b,
+                                denoising_inds_b,
+                                returns_b,
+                                values_b,
+                                advantages_b,
+                                logprobs_b,
+                                use_bc_loss=self.use_bc_loss,
+                                reward_horizon=self.reward_horizon,
+                            )
+                            loss = (
+                                pg_loss
+                                + entropy_loss * self.ent_coef
+                                + v_loss * self.vf_coef
+                                + bc_loss * self.bc_loss_coeff
+                            )
+                            clipfracs += [clipfrac]
 
-                # Explained variation of future rewards using value function
-                y_pred, y_true = values_k.cpu().numpy(), returns_k.cpu().numpy()
-                var_y = np.var(y_true)
-                explained_var = (
-                    np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-                )
+                            # update policy and critic
+                            loss.backward()
+                            if (batch + 1) % self.grad_accumulate == 0:
+                                if self.itr > self.n_critic_warmup_itr:
+                                    if self.max_grad_norm is not None:
+                                        torch.nn.utils.clip_grad_norm_(
+                                            self.model.actor_ft.parameters(),
+                                            self.max_grad_norm,
+                                        )
+                                    self.actor_optimizer.step()
+                                    if (
+                                        self.learn_eta
+                                        and batch % self.eta_update_interval == 0
+                                    ):
+                                        self.eta_optimizer.step()
+                                else:
+                                    log.info(f"NOT updating actor")
+
+                                if not (self.use_discriminator and self.itr <= self.n_discriminator_warmup_itr):
+                                    self.critic_optimizer.step()
+                                else:
+                                    log.info(f"NOT updating critic")
+                                self.actor_optimizer.zero_grad()
+                                self.critic_optimizer.zero_grad()
+                                if self.learn_eta:
+                                    self.eta_optimizer.zero_grad()
+                                log.info(f"run grad update at batch {batch}")
+                                log.info(
+                                    f"approx_kl: {approx_kl}, update_epoch: {update_epoch}, num_batch: {num_batch}"
+                                )
+
+                                # Stop gradient update if KL difference reaches target
+                                if (
+                                    self.target_kl is not None
+                                    and approx_kl > self.target_kl
+                                    and self.itr >= self.n_critic_warmup_itr
+                                ):
+                                    flag_break = True
+                                    break
+                        if flag_break:
+                            break
+
+                    # Explained variation of future rewards using value function
+                    y_pred, y_true = values_k.cpu().numpy(), returns_k.cpu().numpy()
+                    var_y = np.var(y_true)
+                    explained_var = (
+                        np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+                    )
+
+                
+                else:
+                    loss, pg_loss, entropy_loss, v_loss, clipfrac, approx_kl, ratio, bc_loss, eta, explained_var = np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+                    clipfracs = []
+
 
                 # # Update discriminator
                 # if (
@@ -598,7 +623,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 # ):
                 #     for i in range(self.discriminator_update_steps):
                 #         self.train_discriminator(update_grad=((i + 1) % self.discriminator_grad_accumulate == 0))
-                                
+                                    
                 # update discriminator
                 if self.use_discriminator and ((self.itr == 1) or (self.itr % self.discriminator_update_freq == 0)):
                     self.discriminator.train()  # turn to train mode
@@ -608,6 +633,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                         # for each epoch, go through all data in batches
                         inds_k = torch.randperm(total_steps, device=self.device)
                         num_batch = max(1, total_steps // self.discriminator_batch_size)  # skip last ones
+                        # num_batch = 1 # debug TODO
                         for batch in range(num_batch):
                             # Prepare agent data
                             start = batch * self.discriminator_batch_size
@@ -625,24 +651,35 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                             # Sample a batch of expert data
                             expert_obs, expert_actions = self.sample_expert_data(self.discriminator_batch_size)
                             expert_data = {key: expert_obs[key].to(self.device) for key in expert_obs}
+                            if self.augment and "rgb" in expert_data:
+                                # augment expert data since agent data is also augmented
+                                expert_data["rgb"] = self.aug(expert_data["rgb"])
                             expert_data["actions"] = expert_actions.to(self.device)
 
                             # breakpoint()
 
                             # Compute loss (discriminator is cost in this case)
-                            expert_preds = self.discriminator(expert_data)
-                            agent_preds = self.discriminator(agent_data)
+                            expert_sa = self.discriminator.preprocess_data(expert_data)
+                            agent_sa = self.discriminator.preprocess_data(agent_data)
+                            # expert_preds = self.discriminator(expert_data)
+                            # agent_preds = self.discriminator(agent_data)
+                            expert_preds = self.discriminator.model(expert_sa)
+                            agent_preds = self.discriminator.model(agent_sa)
+                            gp = gradient_penalty(learner_sa=agent_sa, expert_sa=expert_sa,f=self.discriminator.model, device=self.device)  # Scalar
                             expert_preds_mean = expert_preds.mean()
                             agent_preds_mean = agent_preds.mean()
-                            loss = expert_preds_mean - agent_preds_mean
+                            discriminator_loss = expert_preds_mean - agent_preds_mean + self.discriminator_gp_scale * gp
+
+                            if batch == 0:
+                                log.info(f"Batch 0 Discriminator loss: {discriminator_loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
 
                             # Backward pass and optimization
-                            loss.backward()
+                            discriminator_loss.backward()
                             if (batch + 1) % self.discriminator_grad_accumulate == 0:
                                 self.discriminator_optimizer.step()
                                 self.discriminator_optimizer.zero_grad()
                                 log.info(f"run grad update for discriminator")
-                                log.info(f"Discriminator loss: {loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
+                                log.info(f"Discriminator loss: {discriminator_loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
 
             # Update lr, min_sampling_std
             if self.itr > self.n_critic_warmup_itr:
@@ -650,6 +687,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 if self.learn_eta:
                     self.eta_lr_scheduler.step()
             self.critic_lr_scheduler.step()
+            if self.use_discriminator:
+                self.discriminator_lr_scheduler.step()
             self.model.step()
             diffusion_min_sampling_std = self.model.get_min_sampling_denoising_std()
 
@@ -721,12 +760,16 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                             "num episode - train": stats['num_episode_finished'],
                             "diffusion - min sampling std": diffusion_min_sampling_std,
                             "actor lr": self.actor_optimizer.param_groups[0]["lr"],
-                            "critic lr": self.critic_optimizer.param_groups[0][
-                                "lr"
-                            ],
+                            "critic lr": self.critic_optimizer.param_groups[0]["lr"],
                         }
                         if self.use_discriminator:
-                            log_stats["avg episode reward (disc) - train"] = stats["avg_episode_reward_disc"]
+                            log_stats.update({
+                                "discriminator loss": discriminator_loss,
+                                "agent_preds_mean": agent_preds_mean,
+                                "expert_preds_mean": expert_preds_mean,
+                                "avg episode reward (disc) - train": stats["avg_episode_reward_disc"],
+                                "discriminator lr": self.discriminator_optimizer.param_groups[0]["lr"],
+                            })
                         wandb.log(log_stats, step=self.itr, commit=True)
                     run_results[-1]["train_episode_reward"] = stats['avg_episode_reward']
                     if self.use_discriminator:
@@ -734,7 +777,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 with open(self.result_path, "wb") as f:
                     pickle.dump(run_results, f)
             self.itr += 1
-    
+
     def summarize_episode_stats(self, reward_trajs, firsts_trajs):
         # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
         episodes_start_end = []

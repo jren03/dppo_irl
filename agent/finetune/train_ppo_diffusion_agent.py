@@ -6,6 +6,7 @@ DPPO fine-tuning.
 import os
 import pickle
 import einops
+import hydra
 import numpy as np
 import torch
 import logging
@@ -13,9 +14,14 @@ import wandb
 import math
 
 log = logging.getLogger(__name__)
+from termcolor import cprint
+import torch.optim as optim
+
 from util.timer import Timer
 from agent.finetune.train_ppo_agent import TrainPPOAgent
 from util.scheduler import CosineAnnealingWarmupRestarts
+from model.irl.discriminator import Discriminator, gradient_penalty
+
 
 
 class TrainPPODiffusionAgent(TrainPPOAgent):
@@ -44,6 +50,75 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                 gamma=1.0,
             )
 
+             # Load expert dataset
+        self.expert_dataset_path = cfg.train.expert_dataset_path
+        self.expert_observations, self.expert_actions = self.load_expert_dataset(
+            self.expert_dataset_path
+        )
+
+        # Discriminator
+        self.use_discriminator = cfg.train.use_discriminator
+        if self.use_discriminator:
+            cprint("Training with discriminator!", color="blue", attrs=["bold"])
+            backbone = None # if not cfg.train.discriminator.backbone else hydra.utils.instantiate(cfg.train.discriminator.backbone)
+            self.discriminator = Discriminator(
+                input_dim=cfg.train.discriminator.input_dim,
+                hidden_dims=cfg.train.discriminator.hidden_dims,
+                activation_type=cfg.train.discriminator.activation_type,
+                backbone=backbone,
+                num_img=0, # cfg.train.discriminator.num_img,
+            ).to(self.device)
+            self.discriminator_optimizer = optim.Adam(
+                self.discriminator.parameters(), lr=cfg.train.discriminator.lr
+            )
+            from util.scheduler import CosineAnnealingWarmupRestarts
+            self.discriminator_lr_scheduler = CosineAnnealingWarmupRestarts(
+                self.discriminator_optimizer,
+                first_cycle_steps=cfg.train.discriminator.lr_scheduler.first_cycle_steps,
+                cycle_mult=1.0,
+                max_lr=cfg.train.discriminator.lr,
+                min_lr=cfg.train.discriminator.lr_scheduler.min_lr,
+                warmup_steps=cfg.train.discriminator.lr_scheduler.warmup_steps,
+                gamma=1.0,
+            )
+            self.discriminator_optimizer.zero_grad()
+            self.discriminator_update_epochs = cfg.train.discriminator.update_epochs
+            self.discriminator_batch_size = cfg.train.discriminator.batch_size
+            # self.discriminator_update_steps = cfg.train.discriminator.update_steps
+            self.discriminator_update_freq = cfg.train.discriminator.update_freq
+            self.discriminator_grad_accumulate = cfg.train.discriminator.grad_accumulate
+            self.n_discriminator_warmup_itr = cfg.train.discriminator.n_discriminator_warmup_itr
+            self.discriminator_gp_scale = cfg.train.discriminator.gp_scale
+
+    def load_expert_dataset(self, path):
+        data = np.load(path)
+        states = torch.tensor(data["states"], dtype=torch.float32)
+        if "images" in data:
+            images = torch.tensor(data["images"], dtype=torch.float32)
+            # images = einops.rearrange(images, "l n h w c -> l (c n) h w")
+            images = einops.rearrange(images, "l n h w c -> l (n c) h w")
+            observations = {"state": states, "rgb": images}
+        else:
+            observations = {"state": states}
+        actions = torch.tensor(data["actions"], dtype=torch.float32)
+        return observations, actions
+
+    def sample_expert_data(self, batch_size):
+        # cprint("[DEBUG]: sampling expert data", color="red", attrs=["bold"])
+        # Assuming expert data is stored in self.expert_dataset
+        # indices = random.sample(range(len(self.expert_actions)), batch_size)
+        indices = np.random.choice(len(self.expert_actions), batch_size, replace=(len(self.expert_actions) < batch_size))
+        expert_obs = {
+            "state": torch.stack(
+                [self.expert_observations["state"][i] for i in indices]
+            ),
+        }
+        if "rgb" in self.expert_observations:
+            expert_obs["rgb"] = torch.stack([self.expert_observations["rgb"][i] for i in indices])
+        expert_actions = torch.stack([self.expert_actions[i] for i in indices])
+        return expert_obs, expert_actions
+
+
     def run(self):
         # Start training loop
         timer = Timer()
@@ -61,7 +136,7 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                     )
 
             # Define train or eval - all envs restart
-            eval_mode = self.itr % self.val_freq == 0 and not self.force_train
+            eval_mode = self.itr % self.val_freq == 0 and not self.force_train and (self.itr == 0 or self.itr > self.n_critic_warmup_itr)
             self.model.eval() if eval_mode else self.model.train()
             last_itr_eval = eval_mode
 
@@ -150,47 +225,59 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                 # count steps --- not acounting for done within action chunk
                 cnt_train_step += self.n_envs * self.act_steps if not eval_mode else 0
 
-            # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
-            episodes_start_end = []
-            for env_ind in range(self.n_envs):
-                env_steps = np.where(firsts_trajs[:, env_ind] == 1)[0]
-                for i in range(len(env_steps) - 1):
-                    start = env_steps[i]
-                    end = env_steps[i + 1]
-                    if end - start > 1:
-                        episodes_start_end.append((env_ind, start, end - 1))
-            if len(episodes_start_end) > 0:
-                reward_trajs_split = [
-                    reward_trajs[start : end + 1, env_ind]
-                    for env_ind, start, end in episodes_start_end
-                ]
-                num_episode_finished = len(reward_trajs_split)
-                episode_reward = np.array(
-                    [np.sum(reward_traj) for reward_traj in reward_trajs_split]
+            gt_reward_trajs = reward_trajs.copy()
+
+            # Relabel rewards with discriminator if enabled
+            if self.use_discriminator:
+                self.discriminator.eval()   # turn to eval mode
+                # obs_trajs.keys() = ('rgb', 'state')
+                # obs_trajs.shape = (n_steps, n_envs, n_cond_steps, obs_dim) --> take last cond_step
+                obs_tensor = {
+                    key: torch.from_numpy(obs_trajs[key][:, :, -1, ...])
+                    .float()
+                    .to(self.device)
+                    for key in ["state"]
+                }
+                # chains_traj.shape = (n_steps, n_envs, denoising_steps, act_horizon, act_dim)
+                # TODO for IRL: not sure if should take 0th or -1 idx for denoising step
+                # print("np.all(chains_trajs[:, :, -1, 0, :] == act_trajs)", np.all(chains_trajs[:, :, -1, 0, :] == act_trajs))
+                act_tensor = (
+                    torch.from_numpy(chains_trajs[:, :, -1, 0, :])  # torch.from_numpy(act_trajs)
+                    .float()
+                    .to(self.device)
                 )
-                if (
-                    self.furniture_sparse_reward
-                ):  # only for furniture tasks, where reward only occurs in one env step
-                    episode_best_reward = episode_reward
-                else:
-                    episode_best_reward = np.array(
-                        [
-                            np.max(reward_traj) / self.act_steps
-                            for reward_traj in reward_trajs_split
-                        ]
+
+                obs_flat = {
+                    key: einops.rearrange(obs_tensor[key], "s e ... -> (s e) ...")
+                    for key in ["state"]
+                }
+                act_flat = einops.rearrange(act_tensor, "s e ... -> (s e) ...")
+                combined_data = {key: obs_flat[key] for key in ["state"]}
+                combined_data["actions"] = act_flat
+
+                # reward is negative of cost
+                with torch.no_grad():
+                    discriminator_rewards = -self.discriminator(combined_data).squeeze(
+                        -1
                     )
-                avg_episode_reward = np.mean(episode_reward)
-                avg_best_reward = np.mean(episode_best_reward)
-                success_rate = np.mean(
-                    episode_best_reward >= self.best_reward_threshold_for_success
+                discriminator_rewards = einops.rearrange(
+                    discriminator_rewards,
+                    "(s e) -> s e ",
+                    s=self.n_steps,
+                    e=self.n_envs,
                 )
-            else:
-                episode_reward = np.array([])
-                num_episode_finished = 0
-                avg_episode_reward = 0
-                avg_best_reward = 0
-                success_rate = 0
-                log.info("[WARNING] No episode completed within the iteration!")
+                reward_trajs = discriminator_rewards.cpu().numpy()
+                cprint(
+                    "[DEBUG]: Relabeling rewards with discriminator",
+                    color="red",
+                    attrs=["bold"],
+                )
+                log.info(f"Discriminator reward mean: {reward_trajs.mean()}, std: {reward_trajs.std()}, min: {reward_trajs.min()}, max: {reward_trajs.max()}")
+
+            stats_with_disc_reward = self.summarize_episode_stats(reward_trajs=reward_trajs, firsts_trajs=firsts_trajs)
+            stats = self.summarize_episode_stats(reward_trajs=gt_reward_trajs, firsts_trajs=firsts_trajs)
+            stats["avg_best_reward_disc"] = stats_with_disc_reward["avg_best_reward"]
+            stats["avg_episode_reward_disc"] = stats_with_disc_reward["avg_episode_reward"]
 
             # Update models
             if not eval_mode:
@@ -285,6 +372,11 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                         "s e ... -> (s e) ...",
                     )
                 }
+                if self.use_discriminator:
+                    act_k = einops.rearrange(
+                        torch.from_numpy(chains_trajs[:, :, -1, 0, :]).float().to(self.device),
+                        "s e ... -> (s e) ...",
+                    )
                 chains_k = einops.rearrange(
                     torch.tensor(chains_trajs, device=self.device).float(),
                     "s e t h d -> (s e) t h d",
@@ -302,92 +394,164 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                 )
                 logprobs_k = torch.tensor(logprobs_trajs, device=self.device).float()
 
-                # Update policy and critic
-                total_steps = self.n_steps * self.n_envs * self.model.ft_denoising_steps
-                clipfracs = []
-                for update_epoch in range(self.update_epochs):
-                    # for each epoch, go through all data in batches
-                    flag_break = False
-                    inds_k = torch.randperm(total_steps, device=self.device)
-                    num_batch = max(1, total_steps // self.batch_size)  # skip last ones
-                    for batch in range(num_batch):
-                        start = batch * self.batch_size
-                        end = start + self.batch_size
-                        inds_b = inds_k[start:end]  # b for batch
-                        batch_inds_b, denoising_inds_b = torch.unravel_index(
-                            inds_b,
-                            (self.n_steps * self.n_envs, self.model.ft_denoising_steps),
-                        )
-                        obs_b = {"state": obs_k["state"][batch_inds_b]}
-                        chains_prev_b = chains_k[batch_inds_b, denoising_inds_b]
-                        chains_next_b = chains_k[batch_inds_b, denoising_inds_b + 1]
-                        returns_b = returns_k[batch_inds_b]
-                        values_b = values_k[batch_inds_b]
-                        advantages_b = advantages_k[batch_inds_b]
-                        logprobs_b = logprobs_k[batch_inds_b, denoising_inds_b]
 
-                        # get loss
-                        (
-                            pg_loss,
-                            entropy_loss,
-                            v_loss,
-                            clipfrac,
-                            approx_kl,
-                            ratio,
-                            bc_loss,
-                            eta,
-                        ) = self.model.loss(
-                            obs_b,
-                            chains_prev_b,
-                            chains_next_b,
-                            denoising_inds_b,
-                            returns_b,
-                            values_b,
-                            advantages_b,
-                            logprobs_b,
-                            use_bc_loss=self.use_bc_loss,
-                            reward_horizon=self.reward_horizon,
-                        )
-                        loss = (
-                            pg_loss
-                            + entropy_loss * self.ent_coef
-                            + v_loss * self.vf_coef
-                            + bc_loss * self.bc_loss_coeff
-                        )
-                        clipfracs += [clipfrac]
+                if not (self.use_discriminator and self.itr <= self.n_discriminator_warmup_itr):
+                    # Update policy and critic
+                    total_steps = self.n_steps * self.n_envs * self.model.ft_denoising_steps
+                    clipfracs = []
+                    for update_epoch in range(self.update_epochs):
+                        # for each epoch, go through all data in batches
+                        flag_break = False
+                        inds_k = torch.randperm(total_steps, device=self.device)
+                        num_batch = max(1, total_steps // self.batch_size)  # skip last ones
+                        for batch in range(num_batch):
+                            start = batch * self.batch_size
+                            end = start + self.batch_size
+                            inds_b = inds_k[start:end]  # b for batch
+                            batch_inds_b, denoising_inds_b = torch.unravel_index(
+                                inds_b,
+                                (self.n_steps * self.n_envs, self.model.ft_denoising_steps),
+                            )
+                            obs_b = {"state": obs_k["state"][batch_inds_b]}
+                            chains_prev_b = chains_k[batch_inds_b, denoising_inds_b]
+                            chains_next_b = chains_k[batch_inds_b, denoising_inds_b + 1]
+                            returns_b = returns_k[batch_inds_b]
+                            values_b = values_k[batch_inds_b]
+                            advantages_b = advantages_k[batch_inds_b]
+                            logprobs_b = logprobs_k[batch_inds_b, denoising_inds_b]
 
-                        # update policy and critic
-                        self.actor_optimizer.zero_grad()
-                        self.critic_optimizer.zero_grad()
-                        if self.learn_eta:
-                            self.eta_optimizer.zero_grad()
-                        loss.backward()
-                        if self.itr >= self.n_critic_warmup_itr:
-                            if self.max_grad_norm is not None:
-                                torch.nn.utils.clip_grad_norm_(
-                                    self.model.actor_ft.parameters(), self.max_grad_norm
-                                )
-                            self.actor_optimizer.step()
-                            if self.learn_eta and batch % self.eta_update_interval == 0:
-                                self.eta_optimizer.step()
-                        self.critic_optimizer.step()
-                        log.info(
-                            f"approx_kl: {approx_kl}, update_epoch: {update_epoch}, num_batch: {num_batch}"
-                        )
+                            # get loss
+                            (
+                                pg_loss,
+                                entropy_loss,
+                                v_loss,
+                                clipfrac,
+                                approx_kl,
+                                ratio,
+                                bc_loss,
+                                eta,
+                            ) = self.model.loss(
+                                obs_b,
+                                chains_prev_b,
+                                chains_next_b,
+                                denoising_inds_b,
+                                returns_b,
+                                values_b,
+                                advantages_b,
+                                logprobs_b,
+                                use_bc_loss=self.use_bc_loss,
+                                reward_horizon=self.reward_horizon,
+                            )
+                            loss = (
+                                pg_loss
+                                + entropy_loss * self.ent_coef
+                                + v_loss * self.vf_coef
+                                + bc_loss * self.bc_loss_coeff
+                            )
+                            clipfracs += [clipfrac]
 
-                        # Stop gradient update if KL difference reaches target
-                        if self.target_kl is not None and approx_kl > self.target_kl:
-                            flag_break = True
+                            # update policy and critic
+                            self.actor_optimizer.zero_grad()
+                            self.critic_optimizer.zero_grad()
+                            if self.learn_eta:
+                                self.eta_optimizer.zero_grad()
+                            loss.backward()
+                            if self.itr > self.n_critic_warmup_itr:
+                                if self.max_grad_norm is not None:
+                                    torch.nn.utils.clip_grad_norm_(
+                                        self.model.actor_ft.parameters(), self.max_grad_norm
+                                    )
+                                self.actor_optimizer.step()
+                                if self.learn_eta and batch % self.eta_update_interval == 0:
+                                    self.eta_optimizer.step()
+                            else:
+                                log.info(f"NOT updating actor")
+                            
+                            if not (self.use_discriminator and self.itr <= self.n_discriminator_warmup_itr):
+                                self.critic_optimizer.step()
+                            else:
+                                log.info(f"NOT updating critic")
+                            log.info(
+                                f"approx_kl: {approx_kl}, update_epoch: {update_epoch}, num_batch: {num_batch}"
+                            )
+
+                            # Stop gradient update if KL difference reaches target
+                            if self.target_kl is not None and approx_kl > self.target_kl:
+                                flag_break = True
+                                break
+                        if flag_break:
                             break
-                    if flag_break:
-                        break
 
-                # Explained variation of future rewards using value function
-                y_pred, y_true = values_k.cpu().numpy(), returns_k.cpu().numpy()
-                var_y = np.var(y_true)
-                explained_var = (
-                    np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-                )
+                    # Explained variation of future rewards using value function
+                    y_pred, y_true = values_k.cpu().numpy(), returns_k.cpu().numpy()
+                    var_y = np.var(y_true)
+                    explained_var = (
+                        np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+                    )
+                
+                else:
+                    loss, pg_loss, entropy_loss, v_loss, clipfrac, approx_kl, ratio, bc_loss, eta, explained_var = np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+                    clipfracs = []
+
+
+                # Update discriminator
+                if self.use_discriminator and ((self.itr == 1) or (self.itr % self.discriminator_update_freq == 0)):
+                    self.discriminator.train()  # turn to train mode
+
+                    total_steps = self.n_steps * self.n_envs
+                    for update_epoch in range(self.discriminator_update_epochs):
+                        # for each epoch, go through all data in batches
+                        inds_k = torch.randperm(total_steps, device=self.device)
+                        num_batch = max(1, total_steps // self.discriminator_batch_size)  # skip last ones
+                        # num_batch = 1 # debug TODO
+                        for batch in range(num_batch):
+                            # Prepare agent data
+                            start = batch * self.discriminator_batch_size
+                            end = start + self.discriminator_batch_size
+                            inds_b = inds_k[start:end]  # b for batch
+                            batch_inds_b = inds_b
+                            assert self.n_cond_step == 1
+                            for k, v in obs_k.items():
+                                assert v.shape[1] == 1
+                            agent_obs = {k: obs_k[k][batch_inds_b][:, -1, ...] for k in obs_k}
+                            agent_actions = act_k[batch_inds_b]
+                            agent_data = {key: agent_obs[key] for key in agent_obs}
+                            agent_data["actions"] = agent_actions
+
+                            # Sample a batch of expert data
+                            expert_obs, expert_actions = self.sample_expert_data(self.discriminator_batch_size)
+                            expert_data = {key: expert_obs[key].to(self.device) for key in expert_obs}
+                            if "rgb" in expert_data and self.augment:
+                                # augment expert data since agent data is also augmented
+                                expert_data["rgb"] = self.aug(expert_data["rgb"])
+                            expert_data["actions"] = expert_actions.to(self.device)
+
+                            # breakpoint()
+
+                            # Compute loss (discriminator is cost in this case)
+                            expert_sa = self.discriminator.preprocess_data(expert_data)
+                            agent_sa = self.discriminator.preprocess_data(agent_data)
+                            # expert_preds = self.discriminator(expert_data)
+                            # agent_preds = self.discriminator(agent_data)
+                            expert_preds = self.discriminator.model(expert_sa)
+                            agent_preds = self.discriminator.model(agent_sa)
+                            gp = gradient_penalty(learner_sa=agent_sa, expert_sa=expert_sa,f=self.discriminator.model, device=self.device)  # Scalar
+                            expert_preds_mean = expert_preds.mean()
+                            agent_preds_mean = agent_preds.mean()
+                            discriminator_loss = expert_preds_mean - agent_preds_mean + self.discriminator_gp_scale * gp
+
+                            if batch == 0:
+                                log.info(f"Batch 0 Discriminator loss: {discriminator_loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
+
+                            # Backward pass and optimization
+                            discriminator_loss.backward()
+                            if (batch + 1) % self.discriminator_grad_accumulate == 0:
+                                self.discriminator_optimizer.step()
+                                self.discriminator_optimizer.zero_grad()
+                                log.info(f"run grad update for discriminator")
+                                log.info(f"Discriminator loss: {discriminator_loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
+
+
 
             # Plot state trajectories (only in D3IL)
             if (
@@ -404,11 +568,13 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                 )
 
             # Update lr, min_sampling_std
-            if self.itr >= self.n_critic_warmup_itr:
+            if self.itr > self.n_critic_warmup_itr:
                 self.actor_lr_scheduler.step()
                 if self.learn_eta:
                     self.eta_lr_scheduler.step()
             self.critic_lr_scheduler.step()
+            if self.use_discriminator:
+                self.discriminator_lr_scheduler.step()
             self.model.step()
             diffusion_min_sampling_std = self.model.get_min_sampling_denoising_std()
 
@@ -423,61 +589,135 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
                     "step": cnt_train_step,
                 }
             )
-            if self.save_trajs:
-                run_results[-1]["obs_full_trajs"] = obs_full_trajs
-                run_results[-1]["obs_trajs"] = obs_trajs
-                run_results[-1]["chains_trajs"] = chains_trajs
-                run_results[-1]["reward_trajs"] = reward_trajs
+            # if self.save_trajs:
+            #     run_results[-1]["obs_full_trajs"] = obs_full_trajs
+            #     run_results[-1]["obs_trajs"] = obs_trajs
+            #     run_results[-1]["chains_trajs"] = chains_trajs
+            #     run_results[-1]["reward_trajs"] = reward_trajs
             if self.itr % self.log_freq == 0:
                 time = timer()
                 run_results[-1]["time"] = time
                 if eval_mode:
                     log.info(
-                        f"eval: success rate {success_rate:8.4f} | avg episode reward {avg_episode_reward:8.4f} | avg best reward {avg_best_reward:8.4f}"
+                        f"eval: success rate {stats['success_rate']:8.4f}  \
+                        | avg episode reward {stats['avg_episode_reward']:8.4f}  \
+                        | avg best reward {stats['avg_best_reward']:8.4f}"
                     )
-                    if self.use_wandb:
-                        wandb.log(
-                            {
-                                "success rate - eval": success_rate,
-                                "avg episode reward - eval": avg_episode_reward,
-                                "avg best reward - eval": avg_best_reward,
-                                "num episode - eval": num_episode_finished,
-                            },
-                            step=self.itr,
-                            commit=False,
+                    if self.use_discriminator:
+                        log.info(
+                            f"avg episode reward (disc) {stats['avg_episode_reward_disc']:8.4f}  \
+                            | avg best reward (disc) {stats['avg_best_reward_disc']:8.4f}"
                         )
-                    run_results[-1]["eval_success_rate"] = success_rate
-                    run_results[-1]["eval_episode_reward"] = avg_episode_reward
-                    run_results[-1]["eval_best_reward"] = avg_best_reward
+                    if self.use_wandb:
+                        log_stats = {
+                            "success rate - eval": stats['success_rate'],
+                            "avg episode reward - eval": stats['avg_episode_reward'],
+                            "avg best reward - eval": stats['avg_best_reward'],
+                            "num episode - eval": stats['num_episode_finished'],
+                        }
+                        if self.use_discriminator:
+                            log_stats.update({
+                                "avg episode reward - disc": stats['avg_episode_reward_disc'],
+                                "avg best reward - disc": stats['avg_best_reward_disc'],
+                            })
+                        wandb.log(log_stats, step=self.itr, commit=False,)
+                    run_results[-1]["eval_success_rate"] = stats['success_rate']
+                    run_results[-1]["eval_episode_reward"] = stats['avg_episode_reward']
+                    run_results[-1]["eval_best_reward"] = stats['avg_best_reward']
+                    if self.use_discriminator:
+                        run_results[-1]["eval_episode_reward_disc"] = stats['avg_episode_reward_disc']
+                        run_results[-1]["eval_best_reward_disc"] = stats['avg_best_reward_disc']
                 else:
                     log.info(
-                        f"{self.itr}: step {cnt_train_step:8d} | loss {loss:8.4f} | pg loss {pg_loss:8.4f} | value loss {v_loss:8.4f} | bc loss {bc_loss:8.4f} | reward {avg_episode_reward:8.4f} | eta {eta:8.4f} | t:{time:8.4f}"
+                        f"{self.itr}: step {cnt_train_step:8d} | loss {loss:8.4f} | pg loss {pg_loss:8.4f} "
+                        f"| value loss {v_loss:8.4f} | bc loss {bc_loss:8.4f} "
+                        f"| reward {stats['avg_episode_reward']:8.4f} "
+                        + (f"| reward(disc) {stats['avg_episode_reward_disc']:8.4f} " if self.use_discriminator else "")
+                        + f"| eta {eta:8.4f} | t:{time:8.4f}"
                     )
                     if self.use_wandb:
-                        wandb.log(
-                            {
-                                "total env step": cnt_train_step,
-                                "loss": loss,
-                                "pg loss": pg_loss,
-                                "value loss": v_loss,
-                                "bc loss": bc_loss,
-                                "eta": eta,
-                                "approx kl": approx_kl,
-                                "ratio": ratio,
-                                "clipfrac": np.mean(clipfracs),
-                                "explained variance": explained_var,
-                                "avg episode reward - train": avg_episode_reward,
-                                "num episode - train": num_episode_finished,
-                                "diffusion - min sampling std": diffusion_min_sampling_std,
-                                "actor lr": self.actor_optimizer.param_groups[0]["lr"],
-                                "critic lr": self.critic_optimizer.param_groups[0][
-                                    "lr"
-                                ],
-                            },
-                            step=self.itr,
-                            commit=True,
-                        )
-                    run_results[-1]["train_episode_reward"] = avg_episode_reward
+                        log_stats = {
+                            "total env step": cnt_train_step,
+                            "loss": loss,
+                            "pg loss": pg_loss,
+                            "value loss": v_loss,
+                            "bc loss": bc_loss,
+                            "eta": eta,
+                            "approx kl": approx_kl,
+                            "ratio": ratio,
+                            "clipfrac": np.mean(clipfracs),
+                            "explained variance": explained_var,
+                            "avg episode reward - train": stats['avg_episode_reward'],
+                            "num episode - train": stats['num_episode_finished'],
+                            "diffusion - min sampling std": diffusion_min_sampling_std,
+                            "actor lr": self.actor_optimizer.param_groups[0]["lr"],
+                            "critic lr": self.critic_optimizer.param_groups[0]["lr"],
+                        }
+                        if self.use_discriminator:
+                            log_stats.update({
+                                "discriminator loss": discriminator_loss,
+                                "agent_preds_mean": agent_preds_mean,
+                                "expert_preds_mean": expert_preds_mean,
+                                "avg episode reward (disc) - train": stats["avg_episode_reward_disc"],
+                                "discriminator lr": self.discriminator_optimizer.param_groups[0]["lr"],
+                            })
+                        wandb.log(log_stats, step=self.itr, commit=True)
+                    run_results[-1]["train_episode_reward"] = stats['avg_episode_reward']
+                    if self.use_discriminator:
+                        run_results[-1]["train_episode_reward_disc"] = stats['avg_episode_reward_disc']
                 with open(self.result_path, "wb") as f:
                     pickle.dump(run_results, f)
             self.itr += 1
+
+    def summarize_episode_stats(self, reward_trajs, firsts_trajs):
+        # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
+        episodes_start_end = []
+        for env_ind in range(self.n_envs):
+            env_steps = np.where(firsts_trajs[:, env_ind] == 1)[0]
+            for i in range(len(env_steps) - 1):
+                start = env_steps[i]
+                end = env_steps[i + 1]
+                if end - start > 1:
+                    episodes_start_end.append((env_ind, start, end - 1))
+        if len(episodes_start_end) > 0:
+            reward_trajs_split = [
+                reward_trajs[start : end + 1, env_ind]
+                for env_ind, start, end in episodes_start_end
+            ]
+            num_episode_finished = len(reward_trajs_split)
+            episode_reward = np.array(
+                [np.sum(reward_traj) for reward_traj in reward_trajs_split]
+            )
+            if (
+                self.furniture_sparse_reward
+            ):  # only for furniture tasks, where reward only occurs in one env step
+                episode_best_reward = episode_reward
+            else:
+                episode_best_reward = np.array(
+                    [
+                        np.max(reward_traj) / self.act_steps
+                        for reward_traj in reward_trajs_split
+                    ]
+                )
+            avg_episode_reward = np.mean(episode_reward)
+            avg_best_reward = np.mean(episode_best_reward)
+            success_rate = np.mean(
+                episode_best_reward >= self.best_reward_threshold_for_success
+            )
+        else:
+            episode_reward = np.array([])
+            num_episode_finished = 0
+            avg_episode_reward = 0
+            avg_best_reward = 0
+            success_rate = 0
+            log.info("[WARNING] No episode completed within the iteration!")
+
+        stats = {
+            "episode_reward": episode_reward,
+            "num_episode_finished": num_episode_finished,
+            "avg_episode_reward": avg_episode_reward,
+            "avg_best_reward": avg_best_reward,
+            "success_rate": success_rate
+        }
+
+        return stats

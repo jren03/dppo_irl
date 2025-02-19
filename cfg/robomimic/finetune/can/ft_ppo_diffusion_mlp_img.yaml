@@ -10,7 +10,10 @@ logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can/can_pre_diffusion_mlp_img_ta4_td100/2024-07-30_22-23-55/checkpoint/state_5000.pt
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img_ta4_td100/2024-12-12_16-41-07_42/checkpoint/state_2000.pt
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-17_15-41-10_42/checkpoint/state_20000.pt
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-21_21-32-13_42/checkpoint/state_9000.pt
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-21_21-32-13_42/checkpoint/state_9000.pt
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-21_21-32-13_42/checkpoint/state_20000.pt
+# base_policy_path: /share/portal/yf428/Code/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo10_ta4_td100/2025-02-07_15-40-08_42/checkpoint/state_10000.pt
+base_policy_path: /share/portal/yf428/Code/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo5_ta4_td100/2025-02-16_01-15-58_42/checkpoint/state_10000.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img${img_size}.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
 
@@ -28,7 +31,7 @@ act_steps: 4
 use_ddim: True
 
 n_demos: 10
-img_size: 224
+img_size: 96
 
 shape_meta:
   obs:
@@ -40,7 +43,7 @@ shape_meta:
     shape: [7]
 
 env:
-  n_envs: 16
+  n_envs: 50
   name: ${env_name}
   best_reward_threshold_for_success: 1
   max_episode_steps: 300
@@ -66,12 +69,12 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_train_itr: 151
+  n_train_itr: 201
   n_critic_warmup_itr: 2
   n_steps: 300
   gamma: 0.999
   augment: True
-  grad_accumulate: 150
+  grad_accumulate: 15
   actor_lr: 5e-5
   actor_weight_decay: 0
   actor_lr_scheduler:
@@ -93,8 +96,8 @@ train:
   reward_scale_running: True
   reward_scale_const: 1.0
   gae_lambda: 0.95
-  batch_size: 16
-  logprob_batch_size: 16
+  batch_size: 500
+  logprob_batch_size: 500
   update_epochs: 10
   vf_coef: 0.5
   target_kl: 1
@@ -105,13 +108,17 @@ train:
     n_discriminator_warmup_itr: 1
     input_dim: ${eval:'${obs_dim} + ${action_dim}'}
     hidden_dims: [256, 256]
-    activation_type: "ReLU"
+    activation_type: "SiLU"
     lr: 1e-4
+    lr_scheduler:
+      first_cycle_steps: ${train.n_train_itr}
+      warmup_steps: 10
+      min_lr: 1e-5
     update_epochs: 1
-    batch_size: 16
+    batch_size: 100
     update_freq: 1
-    update_steps: 75
     grad_accumulate: 15
+    gp_scale: 10
     num_img: 2
     backbone:
       _target_: model.common.vit.VitEncoder

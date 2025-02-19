@@ -7,7 +7,8 @@ _target_: agent.finetune.train_ppo_diffusion_agent.TrainPPODiffusionAgent
 
 name: ${env_name}_ft_diffusion_unet_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/furniture-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/furniture-pretrain/one_leg/one_leg_low_dim_pre_diffusion_unet_ta16_td100/2024-07-03_22-23-38/checkpoint/state_8000.pt
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/furniture-pretrain/one_leg/one_leg_low_dim_pre_diffusion_unet_ta16_td100/2024-07-03_22-23-38/checkpoint/state_8000.pt
+base_policy_path: /share/portal/yf428/Code/dppo_irl/log/furniture-pretrain/one_leg_low_dim_pre_diffusion_unet_ta16_td100/2025-01-25_19-33-47_42/checkpoint/state_8000.pt
 normalization_path: ${oc.env:DPPO_DATA_DIR}/furniture/${env.specific.furniture}_${env.specific.randomness}/normalization.pth
 
 seed: 42
@@ -72,6 +73,25 @@ train:
   update_epochs: 5
   vf_coef: 0.5
   target_kl: 1
+
+  # Discriminator specific
+  use_discriminator: True
+  expert_dataset_path: ${oc.env:DPPO_DATA_DIR}/furniture/${env.specific.furniture}_${env.specific.randomness}/train.npz
+  discriminator:
+    n_discriminator_warmup_itr: 1
+    input_dim: ${eval:'${obs_dim} + ${action_dim}'}
+    hidden_dims: [256, 256]
+    activation_type: "SiLU"
+    lr: 3e-5
+    lr_scheduler:
+      first_cycle_steps: ${train.n_train_itr}
+      warmup_steps: 10
+      min_lr: 1e-5
+    update_epochs: 5
+    batch_size: 30000
+    update_freq: 1
+    grad_accumulate: 1
+    gp_scale: 10
 
 model:
   _target_: model.diffusion.diffusion_ppo.PPODiffusion
