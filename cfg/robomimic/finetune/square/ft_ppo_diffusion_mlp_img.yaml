@@ -102,8 +102,9 @@ train:
   use_discriminator: True
   expert_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/train.npz
   discriminator:
+    action_free: False
     n_discriminator_warmup_itr: 1
-    input_dim: ${eval:'${obs_dim} + ${action_dim}'}
+    input_dim: ${eval:'${obs_dim} if ${train.discriminator.action_free} else (${obs_dim} + ${action_dim})'}
     hidden_dims: [256, 256]
     activation_type: "SiLU"
     lr: 3e-5

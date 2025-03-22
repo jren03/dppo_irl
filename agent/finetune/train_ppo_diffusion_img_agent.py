@@ -63,6 +63,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 activation_type=cfg.train.discriminator.activation_type,
                 backbone=backbone,
                 num_img=cfg.train.discriminator.num_img,
+                action_free=cfg.train.discriminator.action_free,
             ).to(self.device)
             self.discriminator_optimizer = optim.Adam(
                 self.discriminator.parameters(), lr=cfg.train.discriminator.lr

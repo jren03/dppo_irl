@@ -78,8 +78,9 @@ train:
   use_discriminator: True
   expert_dataset_path: ${oc.env:DPPO_DATA_DIR}/furniture/${env.specific.furniture}_${env.specific.randomness}/train.npz
   discriminator:
+    action_free: False
     n_discriminator_warmup_itr: 1
-    input_dim: ${eval:'${obs_dim} + ${action_dim}'}
+    input_dim: ${eval:'${obs_dim} if ${train.discriminator.action_free} else (${obs_dim} + ${action_dim})'}
     hidden_dims: [256, 256]
     activation_type: "SiLU"
     lr: 3e-5
@@ -88,7 +89,7 @@ train:
       warmup_steps: 10
       min_lr: 1e-5
     update_epochs: 5
-    batch_size: 30000
+    batch_size: 6000
     update_freq: 1
     grad_accumulate: 1
     gp_scale: 10
