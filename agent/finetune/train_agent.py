@@ -41,6 +41,7 @@ class TrainAgent:
         self.env_name = cfg.env.name
         env_type = cfg.env.get("env_type", None)
         self.venv = make_async(
+            cfg,
             cfg.env.name,
             env_type=env_type,
             num_envs=cfg.env.n_envs,

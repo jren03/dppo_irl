@@ -3,6 +3,7 @@ result/
 wandb/
 .vscode/
 data/
+Data/
 log/
 logs/
 checkpoints/
@@ -145,5 +146,8 @@ dmypy.json
 .pyre/
 
 cfg/robomimic/*.sh
+robocasa/
+robomimic
+outputs/
 
 *.out
