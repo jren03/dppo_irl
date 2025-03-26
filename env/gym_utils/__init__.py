@@ -195,11 +195,18 @@ def make_async(
                     env_meta = json.load(f)
                 _, env_meta, shape_meta = get_env_details(config, "robocasa", id)
                 env_meta["reward_shaping"] = reward_shaping
-                env = EnvUtils.create_env_from_metadata(
+                # env = EnvUtils.create_env_from_metadata(
+                #     env_meta=env_meta,
+                #     render=render,
+                #     render_offscreen=render_offscreen,
+                #     use_image_obs=use_image_obs,
+                # )
+                env = EnvUtils.create_env_for_data_processing(
                     env_meta=env_meta,
-                    render=render,
-                    render_offscreen=render_offscreen,
-                    use_image_obs=use_image_obs,
+                    camera_names=["agentview", "robot0_eye_in_hand"],
+                    camera_height=config.img_size,
+                    camera_width=config.img_size,
+                    reward_shaping=True,
                 )
                 env.env.hard_reset = False
             else:

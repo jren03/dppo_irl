@@ -13,7 +13,7 @@ from gym import spaces
 import imageio
 
 
-class RobomimicImageWrapper(gym.Env):
+class RobocasaImageWrapper(gym.Env):
     def __init__(
         self,
         env,
@@ -49,6 +49,7 @@ class RobomimicImageWrapper(gym.Env):
             self.obs_max = normalization["obs_max"]
             self.action_min = normalization["action_min"]
             self.action_max = normalization["action_max"]
+            
 
         # setup spaces
         low = np.full(env.action_dimension, fill_value=-1)
@@ -99,6 +100,7 @@ class RobomimicImageWrapper(gym.Env):
         obs = {"rgb": None, "state": None}  # stack rgb if multiple cameras
         for key in self.obs_keys:
             if key in self.image_keys:
+                raw_obs[key] = raw_obs[key].transpose(2, 0, 1)
                 if obs["rgb"] is None:
                     obs["rgb"] = raw_obs[key]
                 else:
@@ -131,7 +133,6 @@ class RobomimicImageWrapper(gym.Env):
         # Start video if specified
         if "video_path" in options:
             self.video_writer = imageio.get_writer(options["video_path"], fps=30)
-
         # Call reset
         new_seed = options.get(
             "seed", None
@@ -141,7 +142,6 @@ class RobomimicImageWrapper(gym.Env):
                 # the env must be fully reset at least once to ensure correct rendering
                 self.env.reset()
                 self.has_reset_before = True
-
             # always reset to the same state to be compatible with gym
             raw_obs = self.env.reset_to({"states": self.init_state})
         elif new_seed is not None:
@@ -173,6 +173,56 @@ class RobomimicImageWrapper(gym.Env):
             width=w,
             camera_name=self.render_camera_name,
         )
+        
+def create_shape_meta(img_size, include_state):
+    shape_meta = {
+    "obs": {
+        "agentview_image": {
+            # gym expects (H, W, C)
+            "shape": [3, img_size, img_size],
+            "type": "rgb",
+        },
+        "robot0_eye_in_hand_image": {
+            # gym expects (H, W, C)
+            "shape": [3, img_size, img_size],
+            "type": "rgb",
+        },
+    },
+    "action": {"shape": [12]},
+    }
+    # if include_state:
+    #     shape_meta["obs"].update(STATE_SHAPE_META)
+    return shape_meta
+    
+def sanitize_for_robomimic(config):
+    if "layout_ids" in config:
+        del config["layout_ids"]
+    if "style_ids" in config:
+        del config["style_ids"]
+    if "obj_groups" in config:
+        del config["obj_groups"]
+    if "translucent_robot" in config:
+        del config["translucent_robot"]
+    if "obj_instance_split" in config:
+        del config["obj_instance_split"]
+    return config
+
+def get_env_details(config, suite, task):
+    import robocasa.utils.robomimic.robomimic_dataset_utils as DatasetUtils
+    
+    dataset_path = "/share/portal/sk3428/dppo_irl/Data/robocasa_datasets/stack/image_64_shaped_done1_v141.hdf5"
+    if not os.path.exists(dataset_path):
+        raise FileNotFoundError(f"Dataset not found at {dataset_path}")
+    env_meta = DatasetUtils.get_env_metadata_from_dataset(dataset_path=dataset_path)
+
+    if task.lower() in ["stack", "door"]:
+        env_meta["env_kwargs"] = sanitize_for_robomimic(env_meta["env_kwargs"])
+
+    shape_meta = create_shape_meta(
+        img_size=config.img_size,
+        include_state=True,
+    )
+    return dataset_path, env_meta, shape_meta
 
 
 if __name__ == "__main__":
@@ -182,31 +232,21 @@ if __name__ == "__main__":
 
     os.environ["MUJOCO_GL"] = "egl"
 
-    cfg = OmegaConf.load("cfg/robomimic/finetune/can/ft_ppo_diffusion_mlp_img.yaml")
+    cfg = OmegaConf.load("cfg/robocasa/finetune/stack/ft_ppo_diffusion_mlp_img.yaml")
     shape_meta = cfg["shape_meta"]
 
-    import robomimic.utils.env_utils as EnvUtils
-    import robomimic.utils.obs_utils as ObsUtils
+    # import robomimic.utils.env_utils as EnvUtils
+    # import robomimic.utils.obs_utils as ObsUtils
     import matplotlib.pyplot as plt
-    
-    obs_modality_dict = {
-        "low_dim": (
-            wrappers.robomimic_image.low_dim_keys
-            if "robomimic_image" in wrappers
-            else wrappers.robomimic_lowdim.low_dim_keys
-        ),
-        "rgb": (
-            wrappers.robomimic_image.image_keys
-            if "robomimic_image" in wrappers
-            else None
-        ),
-    }
-    if obs_modality_dict["rgb"] is None:
-        obs_modality_dict.pop("rgb")
-    ObsUtils.initialize_obs_modality_mapping_from_dict(obs_modality_dict)
 
-    with open(cfg.robomimic_env_cfg_path, "r") as f:
-        env_meta = json.load(f)
+    wrappers = cfg.env.wrappers
+    
+    import robocasa
+    import robocasa.utils.robomimic.robomimic_dataset_utils as DatasetUtils
+    import robocasa.utils.robomimic.robomimic_env_utils as EnvUtils
+
+    wrappers = cfg.env.wrappers
+    _, env_meta, shape_meta = get_env_details(cfg, "robocasa", "stack")
     env = EnvUtils.create_env_from_metadata(
         env_meta=env_meta,
         render=False,
@@ -214,8 +254,34 @@ if __name__ == "__main__":
         use_image_obs=True,
     )
     env.env.hard_reset = False
+    
+    # obs_modality_dict = {
+    #     "low_dim": (
+    #         wrappers.robomimic_image.low_dim_keys
+    #         if "robomimic_image" in wrappers
+    #         else wrappers.robomimic_lowdim.low_dim_keys
+    #     ),
+    #     "rgb": (
+    #         wrappers.robomimic_image.image_keys
+    #         if "robomimic_image" in wrappers
+    #         else None
+    #     ),
+    # }
+    # if obs_modality_dict["rgb"] is None:
+    #     obs_modality_dict.pop("rgb")
+    # ObsUtils.initialize_obs_modality_mapping_from_dict(obs_modality_dict)
 
-    wrapper = RobomimicImageWrapper(
+    # with open(cfg.robomimic_env_cfg_path, "r") as f:
+    #     env_meta = json.load(f)
+    # env = EnvUtils.create_env_from_metadata(
+    #     env_meta=env_meta,
+    #     render=False,
+    #     render_offscreen=False,
+    #     use_image_obs=True,
+    # )
+    # env.env.hard_reset = False
+
+    wrapper = RobocasaImageWrapper(
         env=env,
         shape_meta=shape_meta,
         image_keys=["robot0_eye_in_hand_image"],

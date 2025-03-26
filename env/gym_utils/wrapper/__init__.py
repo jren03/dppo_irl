@@ -1,6 +1,7 @@
 from .multi_step import MultiStep
 from .robomimic_lowdim import RobomimicLowdimWrapper
 from .robomimic_image import RobomimicImageWrapper
+from .robocasa_image import RobocasaImageWrapper
 from .d3il_lowdim import D3ilLowdimWrapper
 from .mujoco_locomotion_lowdim import MujocoLocomotionLowdimWrapper
 
@@ -11,4 +12,5 @@ wrapper_dict = {
     "robomimic_image": RobomimicImageWrapper,
     "d3il_lowdim": D3ilLowdimWrapper,
     "mujoco_locomotion_lowdim": MujocoLocomotionLowdimWrapper,
+    "robocasa_image": RobocasaImageWrapper,
 }

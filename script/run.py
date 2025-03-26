@@ -62,7 +62,7 @@ def main(cfg: OmegaConf):
             f"Downloading normalization statistics from {download_url} to {download_target}"
         )
         gdown.download(url=download_url, output=download_target, fuzzy=True)
-
+        
     # For for-tuning: download checkpoint if needed
     if "base_policy_path" in cfg and not os.path.exists(cfg.base_policy_path):
         download_url = get_checkpoint_download_url(cfg)

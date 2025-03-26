@@ -10,8 +10,8 @@ logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img_ta4_td100/2025-01-15_01-07-45_42/checkpoint/state_3000.pt
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img_ta4_td100/2025-01-15_20-43-44_42/checkpoint/state_10000.pt
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img224_demo5_ta4_td100/2025-01-17_13-17-03_42/checkpoint/state_20000.pt
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img96_demo5_ta4_td100/2025-02-07_15-40-17_42/checkpoint/state_10000.pt
-robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img${img_size}.json
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img96_demo5_ta4_td100/2025-03-25_11-49-46_42/checkpoint/state_1.pt
+robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
 
 seed: 42
@@ -40,7 +40,7 @@ shape_meta:
     shape: [7]
 
 env:
-  n_envs: 50
+  n_envs: 1 #50
   name: ${env_name}
   best_reward_threshold_for_success: 1
   max_episode_steps: 300
