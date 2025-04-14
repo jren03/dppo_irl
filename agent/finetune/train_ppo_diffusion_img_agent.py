@@ -221,7 +221,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         cnt_train_step = 0
         last_itr_eval = False
         done_venv = np.zeros((1, self.n_envs))
-        while self.itr < self.n_train_itr:
+        while self.itr < self.n_train_itr + self.n_discriminator_warmup_itr:
             # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
             options_venv = [{} for _ in range(self.n_envs)]
             if self.itr % self.render_freq == 0 and self.render_video:
@@ -232,8 +232,29 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
 
             # Define train or eval - all envs restart
             eval_mode = self.itr % self.val_freq == 0 and not self.force_train and (self.itr == 0 or self.itr > self.n_critic_warmup_itr)
-            self.model.eval() if eval_mode else self.model.train()
+            descriminator_warmstart_mode = self.itr <= self.n_discriminator_warmup_itr and not eval_mode
+            self.model.eval() if (eval_mode or descriminator_warmstart_mode) else self.model.train()
             last_itr_eval = eval_mode
+            
+            if eval_mode:
+                cprint(
+                    f"[Eval]: iteration {self.itr}",
+                    color="green",
+                    attrs=["bold"],
+                )
+            elif descriminator_warmstart_mode:
+                cprint(
+                    f"[discriminator warmstart]: iteration {self.itr}",
+                    color="blue",
+                    attrs=["bold"],
+                )
+            else:
+                cprint(
+                    f"[Train]: iteration {self.itr}",
+                    color="green",
+                    attrs=["bold"],
+                )
+            
 
             # Reset env before iteration starts (1) if specified, (2) at eval mode, or (3) right after eval mode
             firsts_trajs = np.zeros((self.n_steps + 1, self.n_envs))
@@ -269,6 +290,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             # )
             terminated_trajs = np.zeros((self.n_steps, self.n_envs))
             reward_trajs = np.zeros((self.n_steps, self.n_envs))
+            
 
             # Collect a set of trajectories from env
             for step in range(self.n_steps):
@@ -507,7 +529,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 logprobs_k = torch.tensor(logprobs_trajs, device=self.device).float()
 
 
-                if not (self.use_discriminator and self.itr <= self.n_discriminator_warmup_itr):
+                if not (self.use_discriminator and descriminator_warmstart_mode): # self.itr <= self.n_discriminator_warmup_itr):
                     # Update policy and critic
                     total_steps = self.n_steps * self.n_envs * self.model.ft_denoising_steps
                     clipfracs = []
@@ -580,7 +602,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                                 else:
                                     log.info(f"NOT updating actor")
 
-                                if not (self.use_discriminator and self.itr <= self.n_discriminator_warmup_itr):
+                                if not (self.use_discriminator and descriminator_warmstart_mode): #self.itr <= self.n_discriminator_warmup_itr):
                                     self.critic_optimizer.step()
                                 else:
                                     log.info(f"NOT updating critic")
@@ -624,7 +646,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 # ):
                 #     for i in range(self.discriminator_update_steps):
                 #         self.train_discriminator(update_grad=((i + 1) % self.discriminator_grad_accumulate == 0))
-                                    
+            if descriminator_warmstart_mode or not eval_mode:
                 # update discriminator
                 if self.use_discriminator and ((self.itr == 1) or (self.itr % self.discriminator_update_freq == 0)):
                     self.discriminator.train()  # turn to train mode

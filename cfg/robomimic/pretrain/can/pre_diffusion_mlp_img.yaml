@@ -7,9 +7,10 @@ _target_: agent.pretrain.train_diffusion_agent.TrainDiffusionAgent
 
 name: ${env}_pre_diffusion_mlp_img${img_size}_demo${n_demos}_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img${img_size}-${n_demos}demos-custom_norm/train.npz
+train_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/vib-${env}-img${img_size}-${n_demos}demos-custom_norm/train.npz
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env}-img${img_size}.json
-normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
+normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/vib-${env}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
+## TODO: added vib- for train_dataset_path, normalization_path
 
 seed: 42
 device: cuda:0
@@ -21,8 +22,8 @@ horizon_steps: 4
 cond_steps: 1
 img_cond_steps: 1
 
-n_demos: 10
-img_size: 224
+n_demos: 20 #10
+img_size: 96 #224
 
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}

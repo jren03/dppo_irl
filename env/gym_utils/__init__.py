@@ -42,12 +42,12 @@ def sanitize_for_robomimic(config):
 def get_env_details(config, suite, task):
     import robocasa.utils.robomimic.robomimic_dataset_utils as DatasetUtils
     
-    dataset_path = "/share/portal/sk3428/dppo_irl/Data/robocasa_datasets/stack/image_64_shaped_done1_v141.hdf5"
+    dataset_path = "/share/portal/sk3428/dppo_irl/Data/robocasa_datasets/bread/image_64_shaped_done1_v141.hdf5"
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"Dataset not found at {dataset_path}")
     env_meta = DatasetUtils.get_env_metadata_from_dataset(dataset_path=dataset_path)
 
-    if task.lower() in ["stack", "door"]:
+    if task.lower() in ["stack", "door", "bread"]:
         env_meta["env_kwargs"] = sanitize_for_robomimic(env_meta["env_kwargs"])
 
     shape_meta = create_shape_meta(
@@ -176,6 +176,7 @@ def make_async(
             import robocasa
             import robocasa.utils.robomimic.robomimic_dataset_utils as DatasetUtils
             import robocasa.utils.robomimic.robomimic_env_utils as EnvUtils
+            import robocasa.utils.robomimic.robomimic_obs_utils as ObsUtils
         else:
             import robomimic.utils.env_utils as EnvUtils
             import robomimic.utils.obs_utils as ObsUtils
@@ -188,26 +189,62 @@ def make_async(
     def _make_env():
         if robomimic_env_cfg_path is not None:
             if env_type == "robocasa":
+                # if render_offscreen or use_image_obs:
+                #     os.environ["MUJOCO_GL"] = "egl"
+                
+                # with open(robomimic_env_cfg_path, "r") as f:
+                #     env_meta = json.load(f)
+                # _, env_meta, shape_meta = get_env_details(config, "robocasa", id)
+                # env_meta["reward_shaping"] = reward_shaping
+                # env = EnvUtils.create_env_for_data_processing(
+                #     env_meta=env_meta,
+                #     camera_names=["agentview", "robot0_eye_in_hand"],
+                #     camera_height=config.img_size,
+                #     camera_width=config.img_size,
+                #     reward_shaping=True,
+                # )
+                # env.env.hard_reset = False
+                obs_modality_dict = {
+                    "low_dim": (
+                        wrappers.robocasa_image.low_dim_keys
+                        # if "robocasa_image" in wrappers
+                        # else wrappers.robomimic_lowdim.low_dim_keys
+                    ),
+                    "rgb": (
+                        wrappers.robocasa_image.image_keys
+                        if "robocasa_image" in wrappers
+                        else None
+                    ),
+                }
+                if obs_modality_dict["rgb"] is None:
+                    obs_modality_dict.pop("rgb")
+                ObsUtils.initialize_obs_modality_mapping_from_dict(obs_modality_dict)
                 if render_offscreen or use_image_obs:
                     os.environ["MUJOCO_GL"] = "egl"
-                
                 with open(robomimic_env_cfg_path, "r") as f:
                     env_meta = json.load(f)
-                _, env_meta, shape_meta = get_env_details(config, "robocasa", id)
                 env_meta["reward_shaping"] = reward_shaping
-                # env = EnvUtils.create_env_from_metadata(
-                #     env_meta=env_meta,
-                #     render=render,
-                #     render_offscreen=render_offscreen,
-                #     use_image_obs=use_image_obs,
-                # )
-                env = EnvUtils.create_env_for_data_processing(
+                env_meta["env_kwargs"]["camera_heights"] = config.img_size
+                env_meta["env_kwargs"]["camera_widths"] = config.img_size
+                env = EnvUtils.create_env_from_metadata(
                     env_meta=env_meta,
-                    camera_names=["agentview", "robot0_eye_in_hand"],
-                    camera_height=config.img_size,
-                    camera_width=config.img_size,
-                    reward_shaping=True,
+                    render=render,
+                    # only way to not show collision geometry is to enable render_offscreen, which uses a lot of RAM.
+                    render_offscreen=render_offscreen,
+                    use_image_obs=use_image_obs,
+                    # render_gpu_device_id=0,
                 )
+                
+                # env = EnvUtils.create_env_for_data_processing(
+                #     env_meta=env_meta,
+                #     camera_names=["agentview", "robot0_eye_in_hand"],
+                #     camera_height=config.img_size,
+                #     camera_width=config.img_size,
+                #     reward_shaping=True,
+                # )
+                # Robosuite's hard reset causes excessive memory consumption.
+                # Disabled to run more envs.
+                # https://github.com/ARISE-Initiative/robosuite/blob/92abf5595eddb3a845cd1093703e5a3ccd01e77e/robosuite/environments/base.py#L247-L248
                 env.env.hard_reset = False
             else:
                 obs_modality_dict = {

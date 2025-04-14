@@ -100,7 +100,8 @@ class RobocasaImageWrapper(gym.Env):
         obs = {"rgb": None, "state": None}  # stack rgb if multiple cameras
         for key in self.obs_keys:
             if key in self.image_keys:
-                raw_obs[key] = raw_obs[key].transpose(2, 0, 1)
+                # print(key, raw_obs[key].shape)
+                # raw_obs[key] = raw_obs[key].transpose(2, 0, 1)
                 if obs["rgb"] is None:
                     obs["rgb"] = raw_obs[key]
                 else:
@@ -115,6 +116,16 @@ class RobocasaImageWrapper(gym.Env):
         if self.normalize:
             obs["state"] = self.normalize_obs(obs["state"])
         obs["rgb"] *= 255  # [0, 1] -> [0, 255], in float64
+        # print("&"*100)
+        # print(obs["state"].shape)
+        # print(obs["rgb"].shape)
+        # print(raw_obs.keys())
+        # print(self.obs_keys)
+#         (9,)
+# (6, 96, 96)
+# (9,)
+# (128, 3, 64)
+# dict_keys(['agentview_image', 'robot0_eye_in_hand_image', 'object', 'robot0_joint_pos', 'robot0_joint_pos_cos', 'robot0_joint_pos_sin', 'robot0_joint_vel', 'robot0_eef_pos', 'robot0_eef_quat', 'robot0_eef_quat_site', 'robot0_gripper_qpos', 'robot0_gripper_qvel', 'robot0_base_pos', 'robot0_base_quat', 'robot0_base_to_eef_pos', 'robot0_base_to_eef_quat', 'robot0_base_to_eef_quat_site'])
         return obs
 
     def seed(self, seed=None):
@@ -210,12 +221,12 @@ def sanitize_for_robomimic(config):
 def get_env_details(config, suite, task):
     import robocasa.utils.robomimic.robomimic_dataset_utils as DatasetUtils
     
-    dataset_path = "/share/portal/sk3428/dppo_irl/Data/robocasa_datasets/stack/image_64_shaped_done1_v141.hdf5"
+    dataset_path = "/share/portal/sk3428/dppo_irl/Data/robocasa_datasets/bread/image_64_shaped_done1_v141.hdf5"
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"Dataset not found at {dataset_path}")
     env_meta = DatasetUtils.get_env_metadata_from_dataset(dataset_path=dataset_path)
 
-    if task.lower() in ["stack", "door"]:
+    if task.lower() in ["stack", "door", "bread"]:
         env_meta["env_kwargs"] = sanitize_for_robomimic(env_meta["env_kwargs"])
 
     shape_meta = create_shape_meta(
@@ -232,7 +243,7 @@ if __name__ == "__main__":
 
     os.environ["MUJOCO_GL"] = "egl"
 
-    cfg = OmegaConf.load("cfg/robocasa/finetune/stack/ft_ppo_diffusion_mlp_img.yaml")
+    cfg = OmegaConf.load("cfg/robocasa/finetune/bread/ft_ppo_diffusion_mlp_img.yaml")
     shape_meta = cfg["shape_meta"]
 
     # import robomimic.utils.env_utils as EnvUtils
@@ -246,7 +257,7 @@ if __name__ == "__main__":
     import robocasa.utils.robomimic.robomimic_env_utils as EnvUtils
 
     wrappers = cfg.env.wrappers
-    _, env_meta, shape_meta = get_env_details(cfg, "robocasa", "stack")
+    _, env_meta, shape_meta = get_env_details(cfg, "robocasa", "bread")
     env = EnvUtils.create_env_from_metadata(
         env_meta=env_meta,
         render=False,

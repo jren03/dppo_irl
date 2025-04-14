@@ -46,6 +46,13 @@ robomimic = [
     "robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git",
     "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@v1.4.1",
 ]
+robocasa = [
+    "cython<3",
+    "d4rl",
+    "patchelf",
+    "robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git",
+    "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@v1.5.0",
+]
 d3il = [
     "cython<3",
     "d4rl",

@@ -99,6 +99,7 @@ class RobomimicImageWrapper(gym.Env):
         obs = {"rgb": None, "state": None}  # stack rgb if multiple cameras
         for key in self.obs_keys:
             if key in self.image_keys:
+                # print(key, raw_obs[key].shape)
                 if obs["rgb"] is None:
                     obs["rgb"] = raw_obs[key]
                 else:
@@ -113,6 +114,14 @@ class RobomimicImageWrapper(gym.Env):
         if self.normalize:
             obs["state"] = self.normalize_obs(obs["state"])
         obs["rgb"] *= 255  # [0, 1] -> [0, 255], in float64
+#         print("*"*100)
+#         print(obs["state"].shape)
+#         print(obs["rgb"].shape)
+# #         (9,)
+# # (6, 96, 96)
+# # dict_keys(['agentview_image', 'robot0_eye_in_hand_image', 'object', 'robot0_joint_pos', 'robot0_joint_pos_cos', 'robot0_joint_pos_sin', 'robot0_joint_vel', 'robot0_eef_pos', 'robot0_eef_quat', 'robot0_eef_vel_lin', 'robot0_eef_vel_ang', 'robot0_gripper_qpos', 'robot0_gripper_qvel'])
+#         print(raw_obs.keys())
+#         print(self.obs_keys)
         return obs
 
     def seed(self, seed=None):

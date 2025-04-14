@@ -226,16 +226,16 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize, cu
             for camera in args.cameras:
                 camera_images = f[f"data/{ep}/obs/{camera}"][()]
                 
-                import cv2
-                resized_images = []
-                for img in camera_images:
-                    resized_img = cv2.resize(img, (96, 96), interpolation=cv2.INTER_AREA)
-                    resized_images.append(resized_img)
+                # import cv2
+                # resized_images = []
+                # for img in camera_images:
+                #     resized_img = cv2.resize(img, (96, 96), interpolation=cv2.INTER_AREA)
+                #     resized_images.append(resized_img)
                 
-                resized_images = np.stack(resized_images, axis=0)  # shape: (T, 96, 96, C)
-                images.append(resized_images)
+                # resized_images = np.stack(resized_images, axis=0)  # shape: (T, 96, 96, C)
+                # images.append(resized_images)
     
-                # images.append(camera_images)
+                images.append(camera_images)
 
             # Store trajectories in output dictionary
             out["states"].append(obs)

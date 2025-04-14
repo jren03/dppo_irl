@@ -13,8 +13,8 @@ logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-21_21-32-13_42/checkpoint/state_9000.pt
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-21_21-32-13_42/checkpoint/state_20000.pt
 # base_policy_path: /share/portal/yf428/Code/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo10_ta4_td100/2025-02-07_15-40-08_42/checkpoint/state_10000.pt
-base_policy_path: /share/portal/yf428/Code/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo5_ta4_td100/2025-02-16_01-15-58_42/checkpoint/state_10000.pt
-robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img${img_size}.json
+base_policy_path: /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo20_ta4_td100/2025-03-27_21-10-24_42/checkpoint/state_20000.pt
+robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
 
 seed: 42
@@ -30,7 +30,7 @@ horizon_steps: 4
 act_steps: 4
 use_ddim: True
 
-n_demos: 10
+n_demos: 20
 img_size: 96
 
 shape_meta:
@@ -43,7 +43,7 @@ shape_meta:
     shape: [7]
 
 env:
-  n_envs: 50
+  n_envs: 50 #50
   name: ${env_name}
   best_reward_threshold_for_success: 1
   max_episode_steps: 300

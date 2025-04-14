@@ -72,7 +72,7 @@ class PreTrainAgent:
                 project=cfg.wandb.project,
                 name=cfg.wandb.run,
                 config=OmegaConf.to_container(cfg, resolve=True),
-                mode="disabled",
+                # mode="disabled",
             )
 
         # Build model
