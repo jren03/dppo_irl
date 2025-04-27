@@ -86,6 +86,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             self.discriminator_grad_accumulate = cfg.train.discriminator.grad_accumulate
             self.n_discriminator_warmup_itr = cfg.train.discriminator.n_discriminator_warmup_itr
             self.discriminator_gp_scale = cfg.train.discriminator.gp_scale
+        else:
+            self.n_discriminator_warmup_itr = 0
 
     def load_expert_dataset(self, path):
         data = np.load(path)
@@ -231,8 +233,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     )
 
             # Define train or eval - all envs restart
-            eval_mode = self.itr % self.val_freq == 0 and not self.force_train and (self.itr == 0 or self.itr > self.n_critic_warmup_itr)
-            descriminator_warmstart_mode = self.itr <= self.n_discriminator_warmup_itr and not eval_mode
+            descriminator_warmstart_mode = self.itr < self.n_discriminator_warmup_itr and not self.itr == 0
+            eval_mode = (self.itr - self.n_discriminator_warmup_itr) % self.val_freq == 0 and not self.force_train and not descriminator_warmstart_mode and (self.itr == 0 or (self.itr - self.n_discriminator_warmup_itr) > self.n_critic_warmup_itr)
             self.model.eval() if (eval_mode or descriminator_warmstart_mode) else self.model.train()
             last_itr_eval = eval_mode
             
@@ -587,7 +589,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                             # update policy and critic
                             loss.backward()
                             if (batch + 1) % self.grad_accumulate == 0:
-                                if self.itr > self.n_critic_warmup_itr:
+                                if (self.itr - self.n_discriminator_warmup_itr) > self.n_critic_warmup_itr:
                                     if self.max_grad_norm is not None:
                                         torch.nn.utils.clip_grad_norm_(
                                             self.model.actor_ft.parameters(),
@@ -619,7 +621,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                                 if (
                                     self.target_kl is not None
                                     and approx_kl > self.target_kl
-                                    and self.itr >= self.n_critic_warmup_itr
+                                    and (self.itr - self.n_discriminator_warmup_itr) >= self.n_critic_warmup_itr
                                 ):
                                     flag_break = True
                                     break
@@ -648,11 +650,12 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                 #         self.train_discriminator(update_grad=((i + 1) % self.discriminator_grad_accumulate == 0))
             if descriminator_warmstart_mode or not eval_mode:
                 # update discriminator
-                if self.use_discriminator and ((self.itr == 1) or (self.itr % self.discriminator_update_freq == 0)):
+                if self.use_discriminator and ((self.itr == 1) or ((self.itr - self.n_discriminator_warmup_itr) % self.discriminator_update_freq == 0)):
                     self.discriminator.train()  # turn to train mode
 
                     total_steps = self.n_steps * self.n_envs
-                    for update_epoch in range(self.discriminator_update_epochs):
+                    num_update_epoch = 6 if descriminator_warmstart_mode else self.discriminator_update_epochs
+                    for update_epoch in range(num_update_epoch):
                         # for each epoch, go through all data in batches
                         inds_k = torch.randperm(total_steps, device=self.device)
                         num_batch = max(1, total_steps // self.discriminator_batch_size)  # skip last ones
@@ -705,7 +708,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                                 log.info(f"Discriminator loss: {discriminator_loss.item()}, expert_preds_mean: {expert_preds_mean.item()}, agent_preds_mean: {agent_preds_mean.item()}, update_epoch: {update_epoch}, num_batch: {num_batch}")
 
             # Update lr, min_sampling_std
-            if self.itr > self.n_critic_warmup_itr:
+            if (self.itr - self.n_discriminator_warmup_itr) > self.n_critic_warmup_itr:
                 self.actor_lr_scheduler.step()
                 if self.learn_eta:
                     self.eta_lr_scheduler.step()
@@ -716,7 +719,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             diffusion_min_sampling_std = self.model.get_min_sampling_denoising_std()
 
             # Save model
-            if self.itr % self.save_model_freq == 0 or self.itr == self.n_train_itr - 1:
+            if (self.itr - self.n_discriminator_warmup_itr) % self.save_model_freq == 0 or (self.itr - self.n_discriminator_warmup_itr) == self.n_train_itr - 1:
                 self.save_model()
 
             # Log loss and save metrics
@@ -726,7 +729,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     "step": cnt_train_step,
                 }
             )
-            if self.itr % self.log_freq == 0:
+            if (self.itr - self.n_discriminator_warmup_itr) % self.log_freq == 0:
                 time = timer()
                 run_results[-1]["time"] = time
                 if eval_mode:

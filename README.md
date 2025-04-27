@@ -33,15 +33,38 @@ pip install -e .
 
 3. Install specific environment dependencies (Gym / Kitchen / Robomimic / D3IL / Furniture-Bench) or all dependencies (except for Kitchen, which has dependency conflicts with other tasks).
 ```console
-pip install -e .[gym] # or [kitchen], [robomimic], [d3il], [furniture]
+pip install -e .[gym] # or [robocasa], [kitchen], [robomimic], [d3il], [furniture]
 pip install -e .[all] # except for Kitchen
 ```
+
+For Robocasa, also install dependencies in diffusion_dreamer Robocasa installation [here](https://github.com/jren03/diffusion_dreamer/blob/main/install_instructions/robocasa_install).
 
 4. [Install MuJoCo for Gym and/or Robomimic](installation/install_mujoco.md). [Install D3IL](installation/install_d3il.md). [Install IsaacGym and Furniture-Bench](installation/install_furniture.md)
 
 5. Set environment variables for data and logging directory (default is `data/` and `log/`), and set WandB entity (username or team name)
 ```
 source script/set_path.sh
+```
+
+## Robocasa Data preprocessing
+1. Generate image observations from downloaded dataset.
+```
+python3 robocasa/robocasa/scripts/dataset_states_to_obs.py --done_mode 1 \
+    --dataset /share/portal/sk3428/dppo_irl/Data/robocasa_datasets/door/demo-door-03-14-55traj-20fps.hdf5 \
+    --output_name image_96_shaped_done1_v141.hdf5 \
+    --camera_names agentview robot0_eye_in_hand --camera_height 96 --camera_width 96 --shaped
+```
+2. Generate custom_normalization.npz. This will be used for the argument `custom_normalization_path` in step 3.
+```
+python script/dataset/robocasa_custom_norm.py
+```
+3. Generate custom normalized dataset that will be used in the experiment.
+```
+python script/dataset/process_robomimic_dataset.py \
+--load_path=/share/portal/sk3428/dppo_irl/Data/robocasa_datasets/door/image_96_shaped_done1_v141.hdf5 \
+--save_dir=data/robocasa/door-img96-20demos-custom_norm \
+--normalize --cameras agentview_image robot0_eye_in_hand_image --max_episodes=20 \
+--custom_normalization_path=data/robocasa/custom_normalization/door_normalization.npz
 ```
 
 ## Usage - Pre-training
@@ -66,6 +89,9 @@ export DPPO_WANDB_ENTITY=<your_wandb_entity>
 export DPPO_LOG_DIR=<your_prefered_logging_directory>
 ``` -->
 ```console
+# Robocasa - door
+python script/run.py --config-name=pre_diffusion_mlp_img \ 
+    --config-dir=cfg/robocasa/pretrain/door
 # Gym - hopper/walker2d/halfcheetah
 python script/run.py --config-name=pre_diffusion_mlp \
     --config-dir=cfg/gym/pretrain/hopper-medium-v2
@@ -109,6 +135,9 @@ All the configs can be found under `cfg/<env>/finetune/`. A new WandB project ma
 <!-- Running them will download the default pre-trained policy. -->
 <!-- Running the script will download the default pre-trained policy checkpoint specified in the config (`base_policy_path`) automatically, as well as the normalization statistics, to `DPPO_LOG_DIR`.  -->
 ```console
+# Robocasa - door with discriminator
+python script/run.py --config-name=ft_ppo_diffusion_mlp_img \
+    --config-dir=cfg/robocasa/finetune/door train.use_discriminator=True
 # Gym - hopper/walker2d/halfcheetah
 python script/run.py --config-name=ft_ppo_diffusion_mlp \
     --config-dir=cfg/gym/finetune/hopper-v2
@@ -126,6 +155,8 @@ python script/run.py --config-name=ft_ppo_diffusion_mlp \
 **Note**: In Gym, Robomimic, and D3IL tasks, we run 40, 50, and 50 parallelized MuJoCo environments on CPU, respectively. If you would like to use fewer environments (given limited CPU threads, or GPU memory for rendering), you can reduce `env.n_envs` and increase `train.n_steps`, so the total number of environment steps collected in each iteration (n_envs x n_steps x act_steps) remains roughly the same. Try to set `train.n_steps` a multiple of `env.max_episode_steps / act_steps`, and be aware that we only count episodes finished within an iteration for eval. Furniture-Bench tasks run IsaacGym on a single GPU.
 
 To fine-tune your own pre-trained policy instead, override `base_policy_path` to your own checkpoint, which is saved under `checkpoint/` of the pre-training directory. You can set `base_policy_path=<path>` in the command line when launching fine-tuning.
+
+Total environment step per iteration is the `n_steps * n_envs * act_steps`. The number of epochs per iteration can be changed for both policy and discriminator through `update_epochs`. Discriminator warmup iteration can be changed through `n_discriminator_warmup_itr`. Before running, please check the following arguments: `train.n_train_itr, train.grad_accumulate, train.batch_size, train.update_epochs, train.discriminator.n_discriminator_warmup_itr, train.discriminator.update_epochs, train.discriminator.batch_size, train.discriminator.grad_accumulate, train.discriminator.gp_scale`
 
 <!-- **Note**: If you did not download the pre-training [data](https://drive.google.com/drive/folders/1AXZvNQEKOrp0_jk1VLepKh_oHCg_9e3r?usp=drive_link), you need to download the normalization statistics from it for fine-tuning, e.g., `${DPPO_DATA_DIR}/furniture/round_table_low/normalization.pkl`. -->
 
