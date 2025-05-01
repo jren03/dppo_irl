@@ -166,7 +166,8 @@ class RobocasaImageWrapper(gym.Env):
     def step(self, action):
         if self.normalize:
             action = self.unnormalize_action(action)
-        raw_obs, reward, done, info = self.env.step(action)
+        for _ in range(3): # for action repeat
+            raw_obs, reward, done, info = self.env.step(action)
         obs = self.get_observation(raw_obs)
 
         # render if specified

@@ -235,6 +235,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
             # Define train or eval - all envs restart
             descriminator_warmstart_mode = self.itr < self.n_discriminator_warmup_itr and not self.itr == 0
             eval_mode = (self.itr - self.n_discriminator_warmup_itr) % self.val_freq == 0 and not self.force_train and not descriminator_warmstart_mode and (self.itr == 0 or (self.itr - self.n_discriminator_warmup_itr) > self.n_critic_warmup_itr)
+            if self.itr == 0:
+                eval_mode = True
             self.model.eval() if (eval_mode or descriminator_warmstart_mode) else self.model.train()
             last_itr_eval = eval_mode
             
