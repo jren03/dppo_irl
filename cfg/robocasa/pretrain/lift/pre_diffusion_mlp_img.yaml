@@ -13,7 +13,7 @@ normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env}-img${img_size}-${n_
 
 seed: 42
 device: cuda:0
-env: square
+env: lift
 obs_dim: 9  # proprioception only
 action_dim: 7
 denoising_steps: 100
@@ -21,8 +21,8 @@ horizon_steps: 4
 cond_steps: 1
 img_cond_steps: 1
 
-n_demos: 100
-img_size: 96
+n_demos: 5
+img_size: 224
 
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
@@ -73,7 +73,7 @@ model:
     augment: True
     spatial_emb: 128
     time_dim: 32
-    mlp_dims: [768, 768, 768] # [512, 512, 512]   # originally [768, 768, 768]
+    mlp_dims: [512, 512, 512]
     residual_style: True
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
     horizon_steps: ${horizon_steps}

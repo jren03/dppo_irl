@@ -147,6 +147,7 @@ dmypy.json
 
 cfg/robomimic/*.sh
 robocasa/
+!cfg/robocasa/
 robomimic
 outputs/
 

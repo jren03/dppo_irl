@@ -223,7 +223,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
         cnt_train_step = 0
         last_itr_eval = False
         done_venv = np.zeros((1, self.n_envs))
-        while self.itr < self.n_train_itr + self.n_discriminator_warmup_itr:
+        while self.itr < self.n_train_itr:
             # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
             options_venv = [{} for _ in range(self.n_envs)]
             if self.itr % self.render_freq == 0 and self.render_video:
@@ -234,7 +234,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
 
             # Define train or eval - all envs restart
             descriminator_warmstart_mode = self.itr < self.n_discriminator_warmup_itr and not self.itr == 0
-            eval_mode = (self.itr - self.n_discriminator_warmup_itr) % self.val_freq == 0 and not self.force_train and not descriminator_warmstart_mode and (self.itr == 0 or (self.itr - self.n_discriminator_warmup_itr) > self.n_critic_warmup_itr)
+            eval_mode = (self.itr - self.n_discriminator_warmup_itr) % self.val_freq == 0 and not self.force_train and (self.itr == 0 or (self.itr - self.n_discriminator_warmup_itr) > self.n_critic_warmup_itr) # and not descriminator_warmstart_mode
             if self.itr == 0:
                 eval_mode = True
             self.model.eval() if (eval_mode or descriminator_warmstart_mode) else self.model.train()
@@ -373,9 +373,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
 
                 # reward is negative of cost
                 with torch.no_grad():
-                    discriminator_rewards = -self.discriminator(combined_data).squeeze(
-                        -1
-                    )
+                    discriminator_rewards = -self.discriminator(combined_data).squeeze(-1)
+                    discriminator_rewards = (0.5 + discriminator_rewards) * 2
                 discriminator_rewards = einops.rearrange(
                     discriminator_rewards,
                     "(s e) -> s e ",
@@ -656,7 +655,7 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     self.discriminator.train()  # turn to train mode
 
                     total_steps = self.n_steps * self.n_envs
-                    num_update_epoch = 6 if descriminator_warmstart_mode else self.discriminator_update_epochs
+                    num_update_epoch = 500 // (total_steps * self.n_discriminator_warmup_itr // self.discriminator_batch_size) if descriminator_warmstart_mode else self.discriminator_update_epochs
                     for update_epoch in range(num_update_epoch):
                         # for each epoch, go through all data in batches
                         inds_k = torch.randperm(total_steps, device=self.device)
