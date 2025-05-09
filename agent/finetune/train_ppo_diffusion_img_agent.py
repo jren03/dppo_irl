@@ -655,7 +655,8 @@ class TrainPPOImgDiffusionAgent(TrainPPODiffusionAgent):
                     self.discriminator.train()  # turn to train mode
 
                     total_steps = self.n_steps * self.n_envs
-                    num_update_epoch = 500 // (total_steps * self.n_discriminator_warmup_itr // self.discriminator_batch_size) if descriminator_warmstart_mode else self.discriminator_update_epochs
+                    # num_update_epoch = 500 // (total_steps * self.n_discriminator_warmup_itr // self.discriminator_batch_size) if descriminator_warmstart_mode else self.discriminator_update_epochs
+                    num_update_epoch = self.discriminator_update_epochs
                     for update_epoch in range(num_update_epoch):
                         # for each epoch, go through all data in batches
                         inds_k = torch.randperm(total_steps, device=self.device)

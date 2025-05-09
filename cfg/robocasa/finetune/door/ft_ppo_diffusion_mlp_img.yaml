@@ -7,7 +7,8 @@ _target_: agent.finetune.train_ppo_diffusion_img_agent.TrainPPOImgDiffusionAgent
 
 name: ${env_name}_ft_diffusion_mlp_img${img_size}_demo${n_demos}_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robocasa-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/door_pre_diffusion_mlp_img96_demo1_ta4_td100/2025-05-01_13-01-01_42/checkpoint/state_20000.pt
+base_policy_path: /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/door_pre_diffusion_mlp_img96_demo5_ta4_td100/2025-04-29_00-50-14_42/checkpoint/state_20000.pt
+# /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/door_pre_diffusion_mlp_img96_demo1_ta4_td100/2025-05-01_13-01-01_42/checkpoint/state_20000.pt
 # For 20 demos: /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/door_pre_diffusion_mlp_img96_demo20_ta4_td100/2025-04-07_13-51-49_42/checkpoint/state_20000.pt
 robomimic_env_cfg_path: cfg/robocasa/env_meta/${env_name}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robocasa/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
@@ -25,7 +26,7 @@ horizon_steps: 4
 act_steps: 4
 use_ddim: True
 
-n_demos: 1 #5 #3 #20
+n_demos: 5 #5 #3 #20
 img_size: 96
 
 shape_meta:
@@ -65,12 +66,14 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
+  # use_bc_loss: True
+  # bc_loss_coeff: 0.5
   n_train_itr: 60 # 20 100K total env steps -> 100K / (n_envs * n_steps * act_steps) * 2 (consider evaluation)  = 5
   n_critic_warmup_itr: 2
   n_steps: 200 #300 same as max_episode_steps
   gamma: 0.999
   augment: True
-  grad_accumulate: 1 #15
+  grad_accumulate: 15 #15
   actor_lr: 5e-5
   actor_weight_decay: 0
   actor_lr_scheduler:
@@ -92,7 +95,7 @@ train:
   reward_scale_running: True
   reward_scale_const: 1.0
   gae_lambda: 0.95
-  batch_size: 100 #500
+  batch_size: 500 #500
   logprob_batch_size: 500
   update_epochs: 10
   vf_coef: 0.5
@@ -114,7 +117,7 @@ train:
     update_epochs: 2 #2 5
     batch_size: 100
     update_freq: 1
-    grad_accumulate: 1 #15
+    grad_accumulate: 5 #15
     gp_scale: 5 #5 10
     num_img: 2
     backbone:

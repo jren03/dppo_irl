@@ -114,9 +114,9 @@ train:
       warmup_steps: 10
       min_lr: 1e-5
     update_epochs: 2 #1 5
-    batch_size: 100
+    batch_size: 500
     update_freq: 1
-    grad_accumulate: 1 #15
+    grad_accumulate: 15 #15
     gp_scale: 5 # 10
     num_img: 2
     backbone:

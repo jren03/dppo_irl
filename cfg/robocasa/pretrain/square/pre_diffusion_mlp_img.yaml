@@ -73,7 +73,7 @@ model:
     augment: True
     spatial_emb: 128
     time_dim: 32
-    mlp_dims: [768, 768, 768] # [512, 512, 512]   # originally [768, 768, 768]
+    mlp_dims: [512, 512, 512]   # originally [768, 768, 768]
     residual_style: True
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
     horizon_steps: ${horizon_steps}

@@ -10,7 +10,10 @@ logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/square/square_pre_diffusion_mlp_img_ta4_td100/2024-07-30_22-27-34/checkpoint/state_4000.pt
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/square_pre_diffusion_mlp_img224_demo50_ta4_td100/2025-01-17_15-41-39_42/checkpoint/state_20000.pt
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/square_pre_diffusion_mlp_img224_demo50_ta4_td100/2025-01-21_21-32-06_42/checkpoint/state_20000.pt
-base_policy_path: /share/portal/yf428/Code/dppo_irl/log/robomimic-pretrain/square_pre_diffusion_mlp_img96_demo50_ta4_td100/2025-02-11_16-08-58_42/checkpoint/state_10000.pt
+base_policy_path: /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/square_pre_diffusion_mlp_img96_demo100_ta4_td100/2025-05-08_14-39-15_42/checkpoint/state_20000.pt
+# /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/square_pre_diffusion_mlp_img96_demo100_ta4_td100/2025-05-07_03-17-35_42/checkpoint/state_20000.pt
+# /share/portal/yf428/Code/dppo_irl/log/robomimic-pretrain/square_pre_diffusion_mlp_img96_demo100_ta4_td100/2025-02-12_15-53-22_42/checkpoint/state_20000.pt
+# /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/square_pre_diffusion_mlp_img96_demo100_ta4_td100/2025-05-07_03-17-35_42/checkpoint/state_20000.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img${img_size}.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
 
@@ -27,7 +30,7 @@ horizon_steps: 4
 act_steps: 4
 use_ddim: True
 
-n_demos: 50
+n_demos: 100
 img_size: 96
 
 shape_meta:
@@ -43,7 +46,7 @@ env:
   n_envs: 50
   name: ${env_name}
   best_reward_threshold_for_success: 1
-  max_episode_steps: 400
+  max_episode_steps: 200
   save_video: False
   use_image_obs: True
   wrappers:
@@ -66,12 +69,12 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_train_itr: 301
+  n_train_itr: 20
   n_critic_warmup_itr: 2
-  n_steps: 400
+  n_steps: 200
   gamma: 0.999
   augment: True
-  grad_accumulate: 20
+  grad_accumulate: 15
   actor_lr: 1e-5
   actor_weight_decay: 0
   actor_lr_scheduler:
@@ -115,7 +118,7 @@ train:
     update_epochs: 1
     batch_size: 100
     update_freq: 1
-    grad_accumulate: 20
+    grad_accumulate: 5
     gp_scale: 10
     num_img: 2
     backbone:
