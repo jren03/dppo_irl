@@ -7,13 +7,7 @@ _target_: agent.finetune.train_ppo_diffusion_img_agent.TrainPPOImgDiffusionAgent
 
 name: ${env_name}_ft_diffusion_mlp_img${img_size}_demo${n_demos}_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can/can_pre_diffusion_mlp_img_ta4_td100/2024-07-30_22-23-55/checkpoint/state_5000.pt
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img_ta4_td100/2024-12-12_16-41-07_42/checkpoint/state_2000.pt
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-17_15-41-10_42/checkpoint/state_20000.pt
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-21_21-32-13_42/checkpoint/state_9000.pt
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/can_pre_diffusion_mlp_img224_demo10_ta4_td100/2025-01-21_21-32-13_42/checkpoint/state_20000.pt
-# base_policy_path: /share/portal/yf428/Code/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo10_ta4_td100/2025-02-07_15-40-08_42/checkpoint/state_10000.pt
-base_policy_path: /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo20_ta4_td100/2025-03-27_21-10-24_42/checkpoint/state_20000.pt
+base_policy_path: /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/can_pre_diffusion_mlp_img96_demo10_ta8_td100/2025-05-10_19-31-14_42_horizon8/checkpoint/state_20000.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
 
@@ -26,11 +20,11 @@ denoising_steps: 100
 ft_denoising_steps: 5
 cond_steps: 1
 img_cond_steps: 1
-horizon_steps: 4
+horizon_steps: 8
 act_steps: 4
 use_ddim: True
 
-n_demos: 20
+n_demos: 10
 img_size: 96
 
 shape_meta:
@@ -43,10 +37,10 @@ shape_meta:
     shape: [7]
 
 env:
-  n_envs: 50 #50
+  n_envs: 50 
   name: ${env_name}
   best_reward_threshold_for_success: 1
-  max_episode_steps: 300
+  max_episode_steps: 200
   save_video: False
   use_image_obs: True
   wrappers:
@@ -69,9 +63,9 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_train_itr: 201
+  n_train_itr: 76
   n_critic_warmup_itr: 2
-  n_steps: 300
+  n_steps: 200
   gamma: 0.999
   augment: True
   grad_accumulate: 15
@@ -106,7 +100,7 @@ train:
   expert_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/train.npz
   discriminator:
     action_free: False
-    n_discriminator_warmup_itr: 1
+    n_discriminator_warmup_itr: 2 #1
     input_dim: ${eval:'${obs_dim} if ${train.discriminator.action_free} else (${obs_dim} + ${action_dim})'}
     hidden_dims: [256, 256]
     activation_type: "SiLU"
@@ -115,10 +109,10 @@ train:
       first_cycle_steps: ${train.n_train_itr}
       warmup_steps: 10
       min_lr: 1e-5
-    update_epochs: 1
+    update_epochs: 1 #1
     batch_size: 100
     update_freq: 1
-    grad_accumulate: 15
+    grad_accumulate: 5 #15
     gp_scale: 10
     num_img: 2
     backbone:

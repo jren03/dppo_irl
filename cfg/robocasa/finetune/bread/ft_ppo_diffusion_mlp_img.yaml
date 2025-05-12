@@ -7,10 +7,7 @@ _target_: agent.finetune.train_ppo_diffusion_img_agent.TrainPPOImgDiffusionAgent
 
 name: ${env_name}_ft_diffusion_mlp_img${img_size}_demo${n_demos}_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robocasa-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/bread_pre_diffusion_mlp_img96_demo15_ta4_td100/2025-05-01_13-02-16_42/checkpoint/state_20000.pt
-# For 20 demos: /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/bread_pre_diffusion_mlp_img96_demo20_ta4_td100/2025-04-01_00-22-28_42/checkpoint/state_20000.pt
-# /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/bread_pre_diffusion_mlp_img96_demo20_ta4_td100/2025-03-31_11-41-51_42/checkpoint/state_20000.pt
-# /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/bread_pre_diffusion_mlp_img96_demo20_ta4_td100/2025-03-27_16-12-36_42/checkpoint/state_20000.pt
+base_policy_path: /share/portal/sk3428/dppo_irl/log/robocasa-pretrain/bread_pre_diffusion_mlp_img96_demo25_ta4_td100/2025-04-27_23-42-24_42/checkpoint/state_20000.pt
 robomimic_env_cfg_path: cfg/robocasa/env_meta/${env_name}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robocasa/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
 
@@ -27,7 +24,7 @@ horizon_steps: 4
 act_steps: 4
 use_ddim: True
 
-n_demos: 15 #25 #20
+n_demos: 25 #25 #20
 img_size: 96
 
 shape_meta:
@@ -67,12 +64,14 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_train_itr: 60 # 30 300K total env steps -> 300K / (n_envs * n_steps * act_steps) * 2 (consider evaluation) = 15
+  # use_bc_loss: True
+  # bc_loss_coeff: 0.5
+  n_train_itr: 150 # 30 300K total env steps -> 300K / (n_envs * n_steps * act_steps) * 2 (consider evaluation) = 15
   n_critic_warmup_itr: 2
   n_steps: 200 # 300 same as max_episode_steps
   gamma: 0.999
   augment: True
-  grad_accumulate: 1 # 15
+  grad_accumulate: 15 # 15
   actor_lr: 5e-5
   actor_weight_decay: 0
   actor_lr_scheduler:
@@ -94,7 +93,7 @@ train:
   reward_scale_running: True
   reward_scale_const: 1.0
   gae_lambda: 0.95
-  batch_size: 100 #500
+  batch_size: 500 #500
   logprob_batch_size: 500
   update_epochs: 10
   vf_coef: 0.5
@@ -114,9 +113,9 @@ train:
       warmup_steps: 10
       min_lr: 1e-5
     update_epochs: 2 #1 5
-    batch_size: 500
+    batch_size: 100
     update_freq: 1
-    grad_accumulate: 15 #15
+    grad_accumulate: 5 #15
     gp_scale: 5 # 10
     num_img: 2
     backbone:

@@ -36,7 +36,7 @@ import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
 
 # Path to dataset
-file_path = "/share/portal/sk3428/dppo_irl/Data/robomimic_datasets/square/image_96_shaped_done1_v141.hdf5"
+file_path = "/share/portal/sk3428/dppo_irl/Data/robomimic_datasets/can/image_96_shaped_done1_v141.hdf5"
 # "/share/portal/vm392/diffusion_dreamer/robocasa_datasets/bread/image_96_shaped_done1_v141.hdf5"
 # env_meta = DatasetUtils.get_env_metadata_from_dataset(dataset_path=file_path)
 # print(env_meta)
@@ -75,7 +75,7 @@ print("obs_max =", obs_max)
 
 
 normalization_save_path = os.path.join(
-    "data/robomimic/custom_normalization", "square_normalization.npz" # Change the file path
+    "data/robomimic/custom_normalization", "can_normalization.npz" # Change the file path
 )
 np.savez_compressed(
     normalization_save_path,
