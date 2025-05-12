@@ -194,6 +194,7 @@ def make_dataset(load_path, save_dir, save_name_prefix, val_split, normalize, cu
 
         # Process each demo
         for i in tqdm(range(len(demos))):
+        # for i in tqdm(range(5)):
             ep = demos[i]
             out = out_train if i in train_indices else out_val
 

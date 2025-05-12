@@ -7,7 +7,9 @@ _target_: agent.finetune.train_ppo_diffusion_img_agent.TrainPPOImgDiffusionAgent
 
 name: ${env_name}_ft_diffusion_mlp_img${img_size}_demo${n_demos}_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/lift_pre_diffusion_mlp_img96_demo15_ta8_td100/2025-05-10_23-31-52_42_horizon8/checkpoint/state_20000.pt
+base_policy_path: /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/lift_pre_diffusion_mlp_img96_demo20_ta4_td100/2025-05-12_09-11-08_42/checkpoint/state_20000.pt
+# /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/lift_pre_diffusion_mlp_img96_demo20_ta8_td100/2025-05-12_13-05-45_42/checkpoint/state_20000.pt
+# /share/portal/sk3428/dppo_irl/log/robomimic-pretrain/lift_pre_diffusion_mlp_img96_demo15_ta8_td100/2025-05-12_05-16-34_42/checkpoint/state_20000.pt
 # ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/lift_pre_diffusion_mlp_img96_demo5_ta4_td100/2025-03-25_11-49-46_42/checkpoint/state_1.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}-img.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}-img${img_size}-${n_demos}demos-custom_norm/normalization.npz
@@ -25,7 +27,7 @@ horizon_steps: 8
 act_steps: 4
 use_ddim: True
 
-n_demos: 15
+n_demos: 20
 img_size: 96
 
 shape_meta:
@@ -64,7 +66,7 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_train_itr: 50
+  n_train_itr: 52
   n_critic_warmup_itr: 2
   n_steps: 100
   gamma: 0.999

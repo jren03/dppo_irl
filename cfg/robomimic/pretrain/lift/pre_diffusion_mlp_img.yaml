@@ -21,8 +21,8 @@ horizon_steps: 4
 cond_steps: 1
 img_cond_steps: 1
 
-n_demos: 15 # 10
-img_size: 96 # 224
+n_demos: 20 # 10
+img_size: 96 # 224n
 
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
