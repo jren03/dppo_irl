@@ -60,7 +60,7 @@ python script/dataset/robocasa_custom_norm.py
 ```
 3. Generate custom normalized dataset that will be used in the experiment.
 ```
-python script/dataset/process_robomimic_dataset.py \
+python script/dataset/process_robocasa_dataset.py \
 --load_path=/share/portal/sk3428/dppo_irl/Data/robocasa_datasets/door/image_96_shaped_done1_v141.hdf5 \
 --save_dir=data/robocasa/door-img96-20demos-custom_norm \
 --normalize --cameras agentview_image robot0_eye_in_hand_image --max_episodes=20 \
